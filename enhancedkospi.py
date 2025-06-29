@@ -234,12 +234,10 @@ class EnhancedKospiSectorRSStrategy:
         print(f"총 {len(price_data)}개 섹터 데이터 다운로드 완료")
         return price_data, benchmark_data
     
-       
     def select_sectors(self, price_data, benchmark_data, date):
         """특정 날짜에 RS-Ratio와 RS-Momentum이 모두 100 이상인 섹터 선택"""
         selected_sectors = []
         
-        # 분석에 필요한 과거 데이터 기간
         # 분석에 필요한 과거 데이터 기간
         if self.timeframe == 'weekly':
             lookback_days = self.length * 7 * 4  # 주봉인 경우 더 긴 기간
@@ -290,7 +288,7 @@ class EnhancedKospiSectorRSStrategy:
         return selected_sectors
     
     def backtest(self, start_date, end_date, initial_capital=10000000):
-        """백테스트 실행"""
+        """백테스트 실행 (수정된 포트폴리오 가치 계산)"""
         # 데이터 다운로드 (추가 기간 확보)
         if self.timeframe == 'weekly':
             extra_days = 200  # 주봉인 경우 더 많은 데이터 필요
@@ -316,9 +314,13 @@ class EnhancedKospiSectorRSStrategy:
         
         # 포트폴리오 초기화
         portfolio_value = initial_capital
+        cash_balance = initial_capital  # 현금 잔고 추가
         portfolio_history = []
         holdings = {}
         trade_history = []
+        
+        # 디버깅을 위한 카운터
+        debug_counter = 0
         
         for i, rebal_date in enumerate(rebalance_dates):
             print(f"\n{rebal_date.strftime('%Y-%m-%d')} 리밸런싱")
@@ -332,6 +334,42 @@ class EnhancedKospiSectorRSStrategy:
                 analysis_date = rebal_date + timedelta(days=days_ahead)
             else:
                 analysis_date = rebal_date
+            
+            # 기존 포지션 청산 (리밸런싱)
+            if holdings:
+                cash_balance = 0
+                for ticker, holding in holdings.items():
+                    try:
+                        # 청산 가격 찾기
+                        if analysis_date in price_data[ticker].index:
+                            sell_price = float(price_data[ticker].loc[analysis_date])
+                        else:
+                            # 가장 가까운 날짜의 가격 사용
+                            nearest_idx = price_data[ticker].index.get_indexer([analysis_date], method='nearest')[0]
+                            sell_price = float(price_data[ticker].iloc[nearest_idx])
+                        
+                        sell_value = holding['shares'] * sell_price
+                        cash_balance += sell_value
+                        
+                        # 거래 기록
+                        trade_history.append({
+                            'date': rebal_date,
+                            'ticker': ticker,
+                            'name': holding['name'],
+                            'action': 'SELL',
+                            'shares': holding['shares'],
+                            'price': sell_price
+                        })
+                        
+                        print(f"  청산: {holding['name']} - {holding['shares']}주 @ {sell_price:,.0f}원")
+                        
+                    except Exception as e:
+                        print(f"  {ticker} 청산 실패: {e}")
+                        # 실패 시 매수가로 청산
+                        cash_balance += holding['shares'] * holding['buy_price']
+                
+                portfolio_value = cash_balance
+                holdings = {}
             
             # 섹터 선택
             selected_sectors = self.select_sectors(price_data, benchmark_data, analysis_date)
@@ -350,7 +388,7 @@ class EnhancedKospiSectorRSStrategy:
                     if date <= end_date:
                         portfolio_history.append({
                             'date': date,
-                            'value': portfolio_value,
+                            'value': cash_balance,
                             'holdings': 0
                         })
                 continue
@@ -361,20 +399,22 @@ class EnhancedKospiSectorRSStrategy:
                 print(f"  - {sector['name']}: RS-Ratio={sector['rs_ratio']:.2f}, RS-Momentum={sector['rs_momentum']:.2f}")
             
             # 동일 가중 투자
-            investment_per_sector = portfolio_value / len(selected_sectors)
+            investment_per_sector = cash_balance / len(selected_sectors)
             
             # 새로운 포지션 구성
             new_holdings = {}
+            total_invested = 0
+            
             for sector in selected_sectors:
                 ticker = sector['ticker']
                 try:
                     # 현재 가격 가져오기
                     if analysis_date in price_data[ticker].index:
-                        current_price = price_data[ticker].loc[analysis_date]
+                        current_price = float(price_data[ticker].loc[analysis_date])
                     else:
                         # 가장 가까운 날짜의 가격 사용
-                        nearest_date = price_data[ticker].index[price_data[ticker].index.get_indexer([analysis_date], method='nearest')[0]]
-                        current_price = price_data[ticker].loc[nearest_date]
+                        nearest_idx = price_data[ticker].index.get_indexer([analysis_date], method='nearest')[0]
+                        current_price = float(price_data[ticker].iloc[nearest_idx])
                     
                     if pd.isna(current_price) or current_price <= 0:
                         print(f"{ticker}: 유효하지 않은 가격")
@@ -382,9 +422,12 @@ class EnhancedKospiSectorRSStrategy:
                         
                     shares = int(investment_per_sector / current_price)
                     if shares > 0:
+                        actual_investment = shares * current_price
+                        total_invested += actual_investment
+                        
                         new_holdings[ticker] = {
                             'shares': shares,
-                            'buy_price': float(current_price),
+                            'buy_price': current_price,
                             'name': sector['name']
                         }
                         
@@ -394,14 +437,17 @@ class EnhancedKospiSectorRSStrategy:
                             'name': sector['name'],
                             'action': 'BUY',
                             'shares': shares,
-                            'price': float(current_price)
+                            'price': current_price
                         })
+                        
+                        print(f"  매수: {sector['name']} - {shares}주 @ {current_price:,.0f}원")
                     
                 except Exception as e:
                     print(f"{ticker} 매수 실패: {e}")
                     continue
             
             holdings = new_holdings
+            remaining_cash = cash_balance - total_invested
             
             # 다음 리밸런싱까지 포트폴리오 가치 추적
             if i < len(rebalance_dates) - 1:
@@ -409,36 +455,53 @@ class EnhancedKospiSectorRSStrategy:
             else:
                 next_date = end_date
             
-            # 일별 포트폴리오 가치 계산
+            # 일별 포트폴리오 가치 계산 (수정된 부분)
             dates = pd.date_range(start=rebal_date, end=next_date, freq='D')
+            
             for date in dates:
                 if date <= end_date:
-                    daily_value = 0
+                    daily_value = remaining_cash  # 현금 포함
+                    
+                    # 디버깅 출력 (처음 몇 번만)
+                    if debug_counter < 5 and holdings:
+                        print(f"\n디버깅 - {date.strftime('%Y-%m-%d')}:")
+                        debug_counter += 1
+                    
                     for ticker, holding in holdings.items():
                         try:
-                            # 일별 가격 찾기
-                            if self.timeframe == 'weekly':
-                                # 주봉 데이터에서 가장 가까운 값 찾기
-                                if date in price_data[ticker].index:
-                                    current_price = price_data[ticker].loc[date]
-                                else:
-                                    # Forward fill 방식으로 가격 찾기
-                                    available_dates = price_data[ticker].index[price_data[ticker].index <= date]
-                                    if len(available_dates) > 0:
-                                        current_price = price_data[ticker].loc[available_dates[-1]]
-                                    else:
-                                        current_price = holding['buy_price']
+                            # 가격 찾기
+                            if date in price_data[ticker].index:
+                                current_price = float(price_data[ticker].loc[date])
                             else:
-                                # 일봉 데이터
-                              current_price = price_data[ticker].loc[date]
-                              daily_value += holding['shares'] * current_price
+                                # 이전 거래일 가격 사용
+                                available_dates = price_data[ticker].index[price_data[ticker].index <= date]
+                                if len(available_dates) > 0:
+                                    current_price = float(price_data[ticker].loc[available_dates[-1]])
+                                else:
+                                    current_price = holding['buy_price']
                             
-                        except:
-                            # 해당 날짜에 가격이 없으면 이전 값 사용
-                            pass
+                            # NaN 체크
+                            if pd.isna(current_price) or current_price <= 0:
+                                current_price = holding['buy_price']
+                            
+                            position_value = holding['shares'] * current_price
+                            daily_value += position_value
+                            
+                            # 디버깅 출력
+                            if debug_counter <= 5 and holdings:
+                                print(f"  {ticker}: {holding['shares']}주 × {current_price:,.0f} = {position_value:,.0f}")
+                            
+                        except Exception as e:
+                            # 오류 시 매수 가격 사용
+                            print(f"가격 조회 오류 ({ticker}, {date}): {e}")
+                            position_value = holding['shares'] * holding['buy_price']
+                            daily_value += position_value
                     
-                    if daily_value > 0:
-                        portfolio_value = daily_value
+                    # 포트폴리오 가치 업데이트
+                    portfolio_value = daily_value
+                    
+                    if debug_counter <= 5 and holdings:
+                        print(f"  총 포트폴리오 가치: {portfolio_value:,.0f}")
                     
                     portfolio_history.append({
                         'date': date,
@@ -448,7 +511,15 @@ class EnhancedKospiSectorRSStrategy:
         
         # 결과 정리
         portfolio_df = pd.DataFrame(portfolio_history).drop_duplicates(subset='date').set_index('date')
-        trades_df = pd.DataFrame(trade_history)
+        trades_df = pd.DataFrame(trade_history) if trade_history else pd.DataFrame()
+        
+        # 최종 통계 출력
+        if not portfolio_df.empty:
+            print(f"\n=== 백테스트 완료 ===")
+            print(f"시작 가치: {portfolio_df['value'].iloc[0]:,.0f}")
+            print(f"종료 가치: {portfolio_df['value'].iloc[-1]:,.0f}")
+            print(f"수익률: {(portfolio_df['value'].iloc[-1] / portfolio_df['value'].iloc[0] - 1) * 100:.2f}%")
+            print(f"총 거래 횟수: {len(trades_df) if not trades_df.empty else 0}")
         
         return portfolio_df, trades_df
     
@@ -489,61 +560,33 @@ class EnhancedKospiSectorRSStrategy:
 
 # 사용 예시
 if __name__ == "__main__":
-    # 1. 일봉 기본 전략
-    print("=== 일봉 기본 전략 ===")
-    strategy_daily = EnhancedKospiSectorRSStrategy(
+    # 전략 생성
+    strategy = EnhancedKospiSectorRSStrategy(
         length=20,
         timeframe='daily',
-        recent_cross_days=None  # 크로스 필터링 비활성화
+        recent_cross_days=30
     )
     
-    # 2. 주봉 전략
-    print("\n=== 주봉 전략 ===")
-    strategy_weekly = EnhancedKospiSectorRSStrategy(
-        length=20,
-        timeframe='weekly',
-        recent_cross_days=None
-    )
-    
-    # 3. 최근 크로스 필터링 전략 (일봉)
-    print("\n=== 최근 30일 크로스 필터링 전략 (일봉) ===")
-    strategy_recent_cross = EnhancedKospiSectorRSStrategy(
-        length=20,
-        timeframe='daily',
-        recent_cross_days=30  # 최근 30일 내 크로스한 섹터만
-    )
-    
-    # 4. 최근 크로스 필터링 전략 (주봉)
-    print("\n=== 최근 8주 크로스 필터링 전략 (주봉) ===")
-    strategy_weekly_cross = EnhancedKospiSectorRSStrategy(
-        length=20,
-        timeframe='weekly',
-        recent_cross_days=56  # 약 8주
-    )
-    
-    # 백테스트 실행 예시
-    start_date = datetime(2022, 1, 1)
+    # 백테스트 실행
+    start_date = datetime(2023, 1, 1)
     end_date = datetime(2024, 12, 31)
     
     print(f"\n백테스트 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
     print("초기 자본: 10,000,000원")
     print("-" * 50)
     
-    # 원하는 전략 선택하여 백테스트
-    selected_strategy = strategy_recent_cross  # 예시
-    
-    portfolio_df, trades_df = selected_strategy.backtest(start_date, end_date)
+    portfolio_df, trades_df = strategy.backtest(start_date, end_date)
     
     if portfolio_df is not None and not portfolio_df.empty:
         # 성과 지표 계산
-        metrics = selected_strategy.calculate_performance_metrics(portfolio_df)
+        metrics = strategy.calculate_performance_metrics(portfolio_df)
         
         print("\n=== 백테스트 결과 ===")
         for key, value in metrics.items():
             print(f"{key}: {value}")
         
         # 결과 저장
-        portfolio_df.to_csv('portfolio_history_enhanced.csv')
+        portfolio_df.to_csv('portfolio_history_fixed.csv')
         if not trades_df.empty:
-            trades_df.to_csv('trade_history_enhanced.csv')
+            trades_df.to_csv('trade_history_fixed.csv')
         print("\n결과가 CSV 파일로 저장되었습니다.")
