@@ -15,7 +15,7 @@ class RSStrategyWithJumpModel:
     """
     
     def __init__(self, rs_length=20, rs_timeframe='daily', rs_recent_cross_days=None,
-                 jump_penalty=50.0, regime_lookback=20):
+                 jump_penalty=50.0, regime_lookback=20, use_jump_model=True):
         """
         Parameters:
         - rs_length: RS 계산 기간
@@ -23,6 +23,7 @@ class RSStrategyWithJumpModel:
         - rs_recent_cross_days: 최근 크로스 필터링 기간
         - jump_penalty: Jump Model의 체제 전환 페널티
         - regime_lookback: 체제 판단을 위한 lookback 기간
+        - use_jump_model: Jump Model 사용 여부 (False면 항상 BULL)
         """
         # RS 전략 초기화
         self.rs_strategy = EnhancedKospiSectorRSStrategy(
@@ -31,17 +32,33 @@ class RSStrategyWithJumpModel:
             recent_cross_days=rs_recent_cross_days
         )
         
-        # Jump Model 초기화
-        self.jump_model = KospiJumpModel(
-            n_states=2,
-            lookback_window=regime_lookback,
-            jump_penalty=jump_penalty
-        )
+        # Jump Model 사용 여부
+        self.use_jump_model = use_jump_model
+        
+        if self.use_jump_model:
+            # Jump Model 초기화
+            self.jump_model = KospiJumpModel(
+                n_states=2,
+                lookback_window=regime_lookback,
+                jump_penalty=jump_penalty
+            )
+        else:
+            self.jump_model = None
         
         self.regime_history = None
         
     def prepare_regime_data(self, start_date, end_date):
         """백테스트를 위한 체제 데이터 준비"""
+        if not self.use_jump_model:
+            # Jump Model을 사용하지 않으면 항상 BULL 체제
+            dates = pd.date_range(start=start_date, end=end_date, freq='D')
+            self.regime_history = pd.DataFrame({
+                'state': 0,
+                'regime': 'BULL'
+            }, index=dates)
+            print("Jump Model 비활성화 - 항상 BULL 체제")
+            return self.regime_history
+        
         # Jump Model 학습을 위해 추가 기간 확보
         extended_start = start_date - timedelta(days=100)
         
@@ -66,6 +83,9 @@ class RSStrategyWithJumpModel:
     
     def get_regime_on_date(self, date):
         """특정 날짜의 체제 확인"""
+        if not self.use_jump_model:
+            return 'BULL'  # Jump Model 비활성화시 항상 BULL
+        
         if self.regime_history is None:
             return 'BULL'  # 기본값
         
@@ -86,6 +106,25 @@ class RSStrategyWithJumpModel:
     def backtest(self, start_date, end_date, initial_capital=10000000):
         """Jump Model을 적용한 백테스트"""
         
+        # Jump Model 비활성화시 기본 RS 전략 실행
+        if not self.use_jump_model:
+            print("Jump Model 비활성화 - 기본 RS 전략 실행")
+            # EnhancedKospiSectorRSStrategy의 backtest 메서드 직접 호출
+            portfolio_df, trades_df = self.rs_strategy.backtest(start_date, end_date, initial_capital)
+            
+            # regime 컬럼 추가 (항상 BULL)
+            if portfolio_df is not None and not portfolio_df.empty:
+                portfolio_df['regime'] = 'BULL'
+            
+            # regime_df 생성
+            rebalance_dates = pd.date_range(start=start_date, end=end_date, freq='MS')
+            regime_df = pd.DataFrame({
+                'regime': 'BULL'
+            }, index=rebalance_dates)
+            
+            return portfolio_df, trades_df, regime_df
+        
+        # Jump Model 활성화시 기존 로직 실행
         # 1. 체제 데이터 준비
         self.prepare_regime_data(start_date, end_date)
         
@@ -98,7 +137,7 @@ class RSStrategyWithJumpModel:
         
         if price_data is None or benchmark_data is None:
             print("데이터 다운로드 실패")
-            return None, None
+            return None, None, None
         
         # 3. 리밸런싱 날짜 생성
         rebalance_dates = pd.date_range(start=start_date, end=end_date, freq='MS')
@@ -129,14 +168,22 @@ class RSStrategyWithJumpModel:
                 # 기존 포지션 청산
                 if holdings:
                     for ticker, holding in holdings.items():
-                        trade_history.append({
-                            'date': rebal_date,
-                            'ticker': ticker,
-                            'name': holding['name'],
-                            'action': 'SELL_BEAR',
-                            'shares': holding['shares'],
-                            'price': price_data[ticker].loc[rebal_date] if rebal_date in price_data[ticker].index else holding['buy_price']
-                        })
+                        try:
+                            if rebal_date in price_data[ticker].index:
+                                exit_price = price_data[ticker].loc[rebal_date]
+                            else:
+                                exit_price = holding['buy_price']
+                            
+                            trade_history.append({
+                                'date': rebal_date,
+                                'ticker': ticker,
+                                'name': holding['name'],
+                                'action': 'SELL_BEAR',
+                                'shares': holding['shares'],
+                                'price': float(exit_price)
+                            })
+                        except:
+                            pass
                     holdings = {}
                 
                 # 다음 리밸런싱까지 현금 보유
@@ -241,11 +288,11 @@ class RSStrategyWithJumpModel:
             dates = pd.date_range(start=rebal_date, end=next_date, freq='D')
             for date in dates:
                 if date <= end_date:
-                    # 현재 체제 확인
-                    daily_regime = self.get_regime_on_date(date)
+                    # 현재 체제 확인 (Jump Model 사용시에만)
+                    daily_regime = self.get_regime_on_date(date) if self.use_jump_model else 'BULL'
                     
-                    # BEAR 체제로 전환된 경우 즉시 청산
-                    if daily_regime == 'BEAR' and holdings:
+                    # BEAR 체제로 전환된 경우 즉시 청산 (Jump Model 사용시에만)
+                    if self.use_jump_model and daily_regime == 'BEAR' and holdings:
                         print(f"\n{date.strftime('%Y-%m-%d')} BEAR 체제 감지 - 긴급 청산")
                         
                         portfolio_value = 0
@@ -289,7 +336,12 @@ class RSStrategyWithJumpModel:
                                     if date in price_data[ticker].index:
                                         current_price = price_data[ticker].loc[date]
                                     else:
-                                        current_price = holding['buy_price']
+                                        # 주말이나 휴일인 경우 이전 가격 사용
+                                        available_dates = price_data[ticker].index[price_data[ticker].index <= date]
+                                        if len(available_dates) > 0:
+                                            current_price = price_data[ticker].loc[available_dates[-1]]
+                                        else:
+                                            current_price = holding['buy_price']
                                 
                                 daily_value += holding['shares'] * current_price
                             except:
@@ -320,8 +372,8 @@ class RSStrategyWithJumpModel:
         # 기본 성과 지표
         metrics = self.rs_strategy.calculate_performance_metrics(portfolio_df)
         
-        # 체제별 성과 분석
-        if 'regime' in portfolio_df.columns:
+        # 체제별 성과 분석 (Jump Model 사용시에만)
+        if self.use_jump_model and 'regime' in portfolio_df.columns:
             bull_df = portfolio_df[portfolio_df['regime'] == 'BULL']
             bear_df = portfolio_df[portfolio_df['regime'] == 'BEAR']
             
@@ -341,16 +393,7 @@ class RSStrategyWithJumpModel:
 
 # 사용 예시
 if __name__ == "__main__":
-    print("=== 코스피 섹터 RS 전략 + Jump Model ===\n")
-    
-    # 전략 생성
-    strategy = RSStrategyWithJumpModel(
-        rs_length=20,
-        rs_timeframe='daily',
-        rs_recent_cross_days=30,  # 최근 30일 크로스
-        jump_penalty=50.0,
-        regime_lookback=20
-    )
+    print("=== 코스피 섹터 RS 전략 비교 테스트 ===\n")
     
     # 백테스트 기간
     start_date = datetime(2020, 1, 1)
@@ -360,37 +403,65 @@ if __name__ == "__main__":
     print("초기 자본: 10,000,000원")
     print("-" * 60)
     
-    # 백테스트 실행
-    portfolio_df, trades_df, regime_df = strategy.backtest(start_date, end_date)
+    # 1. Jump Model 비활성화 (기본 RS 전략과 동일해야 함)
+    print("\n=== Jump Model 비활성화 (기본 RS 전략) ===")
+    strategy_no_jump = RSStrategyWithJumpModel(
+        rs_length=20,
+        rs_timeframe='daily',
+        rs_recent_cross_days=30,
+        use_jump_model=False  # Jump Model 비활성화
+    )
     
-    if portfolio_df is not None and not portfolio_df.empty:
-        # 성과 지표 계산
-        metrics = strategy.calculate_performance_metrics(portfolio_df)
-        
-        print("\n=== 백테스트 결과 ===")
-        for key, value in metrics.items():
+    portfolio_no_jump, trades_no_jump, regime_no_jump = strategy_no_jump.backtest(start_date, end_date)
+    
+    if portfolio_no_jump is not None and not portfolio_no_jump.empty:
+        metrics_no_jump = strategy_no_jump.calculate_performance_metrics(portfolio_no_jump)
+        print("\n결과:")
+        for key, value in metrics_no_jump.items():
             print(f"{key}: {value}")
-        
-        # 거래 통계
-        if not trades_df.empty:
-            print(f"\n=== 거래 통계 ===")
-            print(f"총 거래 횟수: {len(trades_df)}")
-            
-            # 액션별 거래 횟수
-            action_counts = trades_df['action'].value_counts()
-            for action, count in action_counts.items():
-                print(f"  - {action}: {count}회")
-            
-            # BEAR 청산 통계
-            bear_sells = trades_df[trades_df['action'].str.contains('BEAR')]
-            if not bear_sells.empty:
-                print(f"\nBEAR 체제 청산: {len(bear_sells)}회")
-        
-        # 결과 저장
-        portfolio_df.to_csv('portfolio_with_jump_model.csv')
-        if not trades_df.empty:
-            trades_df.to_csv('trades_with_jump_model.csv')
-        if not regime_df.empty:
-            regime_df.to_csv('regime_history.csv')
-        
-        print("\n결과가 CSV 파일로 저장되었습니다.")
+    
+    # 2. Jump Model 활성화
+    print("\n\n=== Jump Model 활성화 ===")
+    strategy_with_jump = RSStrategyWithJumpModel(
+        rs_length=20,
+        rs_timeframe='daily',
+        rs_recent_cross_days=30,
+        jump_penalty=50.0,
+        regime_lookback=20,
+        use_jump_model=True  # Jump Model 활성화
+    )
+    
+    portfolio_with_jump, trades_with_jump, regime_with_jump = strategy_with_jump.backtest(start_date, end_date)
+    
+    if portfolio_with_jump is not None and not portfolio_with_jump.empty:
+        metrics_with_jump = strategy_with_jump.calculate_performance_metrics(portfolio_with_jump)
+        print("\n결과:")
+        for key, value in metrics_with_jump.items():
+            print(f"{key}: {value}")
+    
+    # 3. 기본 EnhancedKospiSectorRSStrategy와 비교
+    print("\n\n=== 기본 EnhancedKospiSectorRSStrategy ===")
+    basic_strategy = EnhancedKospiSectorRSStrategy(
+        length=20,
+        timeframe='daily',
+        recent_cross_days=30
+    )
+    
+    portfolio_basic, trades_basic = basic_strategy.backtest(start_date, end_date)
+    
+    if portfolio_basic is not None and not portfolio_basic.empty:
+        metrics_basic = basic_strategy.calculate_performance_metrics(portfolio_basic)
+        print("\n결과:")
+        for key, value in metrics_basic.items():
+            print(f"{key}: {value}")
+    
+    # 결과 저장
+    if portfolio_no_jump is not None:
+        portfolio_no_jump.to_csv('portfolio_no_jump.csv')
+    if portfolio_with_jump is not None:
+        portfolio_with_jump.to_csv('portfolio_with_jump.csv')
+    if portfolio_basic is not None:
+        portfolio_basic.to_csv('portfolio_basic.csv')
+    
+    print("\n\n결과가 CSV 파일로 저장되었습니다.")
+    print("Jump Model 비활성화 버전과 기본 전략의 결과가 동일한지 확인하세요.")
