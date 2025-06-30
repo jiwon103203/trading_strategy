@@ -64,29 +64,43 @@ class UniversalJumpModel:
             window_returns = returns.iloc[i-self.lookback_window:i]
             
             # 1. 평균 수익률
-            mean_return = window_returns.mean()
+            mean_return = float(window_returns.mean())
             
-            # 2. 실현 변동성 (Realized Volatility)
-            realized_vol = window_returns.std() * np.sqrt(252)
+            # 2. 실현 변동성 (Realized Volatility) - 명시적으로 float로 변환
+            realized_vol = float(window_returns.std()) * np.sqrt(252)
             
             # 3. 하방 변동성 (Downside Volatility)
             downside_returns = window_returns[window_returns < 0]
-            downside_vol = downside_returns.std() * np.sqrt(252) if len(downside_returns) > 0 else 0
+            if len(downside_returns) > 0:
+                downside_vol = float(downside_returns.std()) * np.sqrt(252)
+            else:
+                downside_vol = 0.0
             
             # 4. 왜도 (Skewness)
-            skewness = window_returns.skew()
+            try:
+                skewness = float(window_returns.skew())
+                if pd.isna(skewness):
+                    skewness = 0.0
+            except:
+                skewness = 0.0
             
             # 5. 최대 낙폭 (Maximum Drawdown)
-            cumulative = (1 + window_returns).cumprod()
-            running_max = cumulative.expanding().max()
-            drawdown = (cumulative - running_max) / running_max
-            max_drawdown = drawdown.min()
+            try:
+                cumulative = (1 + window_returns).cumprod()
+                running_max = cumulative.expanding().max()
+                drawdown = (cumulative - running_max) / running_max
+                max_drawdown = float(drawdown.min())
+            except:
+                max_drawdown = 0.0
             
             # 6. 상승/하락 일수 비율
-            up_days_ratio = (window_returns > 0).sum() / len(window_returns)
+            up_days_ratio = float((window_returns > 0).sum()) / len(window_returns)
             
-            # 7. 변동성 비율 (Volatility Ratio)
-            vol_ratio = downside_vol / realized_vol if realized_vol > 0 else 1
+            # 7. 변동성 비율 (Volatility Ratio) - 수정된 부분
+            if realized_vol > 0:
+                vol_ratio = downside_vol / realized_vol
+            else:
+                vol_ratio = 1.0
             
             features_list.append({
                 'date': returns.index[i],
@@ -100,6 +114,10 @@ class UniversalJumpModel:
             })
         
         features_df = pd.DataFrame(features_list).set_index('date')
+        
+        # NaN 값 처리
+        features_df = features_df.fillna(0)
+        
         return features_df
     
     def fit_jump_model(self, features_df):
@@ -171,15 +189,26 @@ class UniversalJumpModel:
             state_mask = (states == state)
             state_features = features_df[state_mask]
             
-            regime_stats[state] = {
-                'count': len(state_features),
-                'avg_return': state_features['mean_return'].mean(),
-                'avg_volatility': state_features['realized_vol'].mean(),
-                'avg_downside_vol': state_features['downside_vol'].mean(),
-                'avg_drawdown': state_features['max_drawdown'].mean(),
-                'avg_up_days': state_features['up_days_ratio'].mean(),
-                'avg_vol_ratio': state_features['vol_ratio'].mean()
-            }
+            if len(state_features) > 0:
+                regime_stats[state] = {
+                    'count': len(state_features),
+                    'avg_return': float(state_features['mean_return'].mean()),
+                    'avg_volatility': float(state_features['realized_vol'].mean()),
+                    'avg_downside_vol': float(state_features['downside_vol'].mean()),
+                    'avg_drawdown': float(state_features['max_drawdown'].mean()),
+                    'avg_up_days': float(state_features['up_days_ratio'].mean()),
+                    'avg_vol_ratio': float(state_features['vol_ratio'].mean())
+                }
+            else:
+                regime_stats[state] = {
+                    'count': 0,
+                    'avg_return': 0.0,
+                    'avg_volatility': 0.0,
+                    'avg_downside_vol': 0.0,
+                    'avg_drawdown': 0.0,
+                    'avg_up_days': 0.0,
+                    'avg_vol_ratio': 1.0
+                }
         
         # Bear 상태 식별 (점수 기반)
         state_scores = {}
@@ -209,13 +238,14 @@ class UniversalJumpModel:
         print(f"\n=== {self.benchmark_name} 체제별 특성 ===")
         for state, stats in regime_stats.items():
             regime_type = self.state_mapping[state]
-            print(f"\n{regime_type} 체제 (State {state}):")
-            print(f"  - 기간 비율: {stats['count'] / len(features_df) * 100:.1f}%")
-            print(f"  - 평균 수익률: {stats['avg_return']*252*100:.2f}%")
-            print(f"  - 평균 변동성: {stats['avg_volatility']*100:.1f}%")
-            print(f"  - 평균 하방 변동성: {stats['avg_downside_vol']*100:.1f}%")
-            print(f"  - 평균 최대 낙폭: {stats['avg_drawdown']*100:.1f}%")
-            print(f"  - 평균 상승일 비율: {stats['avg_up_days']*100:.1f}%")
+            if stats['count'] > 0:
+                print(f"\n{regime_type} 체제 (State {state}):")
+                print(f"  - 기간 비율: {stats['count'] / len(features_df) * 100:.1f}%")
+                print(f"  - 평균 수익률: {stats['avg_return']*252*100:.2f}%")
+                print(f"  - 평균 변동성: {stats['avg_volatility']*100:.1f}%")
+                print(f"  - 평균 하방 변동성: {stats['avg_downside_vol']*100:.1f}%")
+                print(f"  - 평균 최대 낙폭: {stats['avg_drawdown']*100:.1f}%")
+                print(f"  - 평균 상승일 비율: {stats['avg_up_days']*100:.1f}%")
         
         return regime_stats
     
@@ -243,7 +273,10 @@ class UniversalJumpModel:
         self.current_regime = predicted_state
         
         # 신뢰도 계산
-        confidence = 1 - (min(distances) / max(distances))
+        if max(distances) > 0:
+            confidence = 1 - (min(distances) / max(distances))
+        else:
+            confidence = 1.0
         
         return self.state_mapping[predicted_state], confidence
     
@@ -255,11 +288,16 @@ class UniversalJumpModel:
             end_date
         )
         
-        if price_data is None:
+        if price_data is None or price_data.empty:
+            print(f"{self.benchmark_name} 데이터를 가져올 수 없습니다.")
             return None
         
         # 특징 계산
         features_df = self.calculate_features(price_data)
+        
+        if features_df.empty:
+            print(f"{self.benchmark_name} 특징 계산 실패")
+            return None
         
         # 모델 학습
         states = self.fit_jump_model(features_df)
@@ -280,13 +318,15 @@ class UniversalJumpModel:
         # 데이터 다운로드
         price_data = self.download_benchmark_data(start_date, end_date)
         
-        if price_data is None:
+        if price_data is None or price_data.empty:
+            print(f"{self.benchmark_name} 데이터를 가져올 수 없습니다.")
             return None
         
         # 특징 계산
         features_df = self.calculate_features(price_data)
         
         if features_df.empty:
+            print(f"{self.benchmark_name} 특징 계산 실패")
             return None
         
         # 모델이 학습되지 않은 경우 학습
@@ -308,7 +348,7 @@ class UniversalJumpModel:
         """체제별 상세 통계"""
         regime_history = self.get_regime_history(start_date, end_date)
         
-        if regime_history is None:
+        if regime_history is None or regime_history.empty:
             return None
         
         # 체제 전환 분석
