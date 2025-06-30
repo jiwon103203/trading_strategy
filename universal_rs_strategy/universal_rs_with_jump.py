@@ -8,14 +8,16 @@ warnings.filterwarnings('ignore')
 
 class UniversalRSWithJumpModel:
     """
-    범용 RS 전략 + Jump Model 통합
+    범용 RS 전략 + Jump Model 통합 (Training Cutoff 지원)
     - 시장이 BEAR 체제일 때 모든 투자 중단
     - BULL 체제일 때만 RS 전략 실행
+    - Jump Model은 2024년까지만 학습, 2025년은 추론용
     """
     
     def __init__(self, preset_config, rs_length=20, rs_timeframe='daily', 
                  rs_recent_cross_days=None, jump_penalty=50.0, 
-                 regime_lookback=20, use_jump_model=True):
+                 regime_lookback=20, use_jump_model=True,
+                 training_cutoff_date=None):
         """
         Parameters:
         - preset_config: 프리셋 설정 딕셔너리 (benchmark, components, name)
@@ -25,6 +27,7 @@ class UniversalRSWithJumpModel:
         - jump_penalty: Jump Model의 체제 전환 페널티
         - regime_lookback: 체제 판단을 위한 lookback 기간
         - use_jump_model: Jump Model 사용 여부
+        - training_cutoff_date: Jump Model 학습 마감일 (None이면 2024-12-31)
         """
         # RS 전략 초기화
         self.rs_strategy = UniversalRSStrategy(
@@ -39,15 +42,23 @@ class UniversalRSWithJumpModel:
         # Jump Model 사용 여부
         self.use_jump_model = use_jump_model
         
+        # Training cutoff 설정
+        if training_cutoff_date is None:
+            self.training_cutoff_date = datetime(2024, 12, 31)
+        else:
+            self.training_cutoff_date = training_cutoff_date
+        
         if self.use_jump_model:
-            # Jump Model 초기화
+            # Jump Model 초기화 (training cutoff 포함)
             self.jump_model = UniversalJumpModel(
                 benchmark_ticker=preset_config['benchmark'],
                 benchmark_name=preset_config.get('name', 'Market'),
                 n_states=2,
                 lookback_window=regime_lookback,
-                jump_penalty=jump_penalty
+                jump_penalty=jump_penalty,
+                training_cutoff_date=self.training_cutoff_date
             )
+            print(f"Jump Model 학습 마감일: {self.training_cutoff_date.strftime('%Y-%m-%d')}")
         else:
             self.jump_model = None
         
@@ -68,9 +79,70 @@ class UniversalRSWithJumpModel:
         # Jump Model 학습을 위해 추가 기간 확보
         extended_start = start_date - timedelta(days=100)
         
-        # 체제 이력 계산
+        # 체제 이력 계산 (training cutoff 고려)
         print(f"{self.preset_config['name']} 체제 분석 중...")
-        self.regime_history = self.jump_model.get_regime_history(extended_start, end_date)
+        print(f"학습 마감일: {self.training_cutoff_date.strftime('%Y-%m-%d')}")
+        
+        # 먼저 모델을 학습시키고
+        self.jump_model.train_model_with_cutoff(
+            start_date=extended_start - timedelta(days=365*15),  # 15년 전부터
+            end_date=self.training_cutoff_date
+        )
+        
+        # 전체 기간에 대한 체제 예측 수행
+        if end_date <= self.training_cutoff_date:
+            # 백테스트 기간이 모두 학습 기간 내인 경우
+            self.regime_history = self.jump_model.get_regime_history(extended_start, end_date)
+        else:
+            # 백테스트 기간이 학습 기간을 넘어가는 경우
+            # 학습 기간 내 체제 + 추론 기간 체제를 결합
+            
+            # 1. 학습 기간 내 체제 계산
+            in_sample_regime = self.jump_model.get_regime_history(extended_start, self.training_cutoff_date)
+            
+            # 2. 추론 기간 체제 예측
+            out_of_sample_dates = pd.date_range(
+                start=self.training_cutoff_date + timedelta(days=1),
+                end=end_date,
+                freq='D'
+            )
+            
+            # 각 날짜별로 예측 수행 (간단화)
+            oos_regimes = []
+            for date in out_of_sample_dates:
+                # 해당 날짜까지의 특징을 계산하여 예측
+                try:
+                    # 특징 계산을 위한 데이터 준비
+                    feature_start = date - timedelta(days=self.jump_model.lookback_window * 2)
+                    price_data = self.jump_model.download_benchmark_data(feature_start, date)
+                    
+                    if price_data is not None and not price_data.empty:
+                        features_df = self.jump_model.calculate_features(price_data)
+                        if not features_df.empty:
+                            latest_features = features_df.iloc[-1]
+                            regime, _ = self.jump_model.predict_regime(latest_features)
+                            oos_regimes.append(regime)
+                        else:
+                            oos_regimes.append('BULL')  # 기본값
+                    else:
+                        oos_regimes.append('BULL')  # 기본값
+                except:
+                    oos_regimes.append('BULL')  # 오류시 기본값
+            
+            # Out-of-sample 체제 데이터프레임 생성
+            if oos_regimes:
+                out_of_sample_regime = pd.DataFrame({
+                    'state': [0 if r == 'BULL' else 1 for r in oos_regimes],
+                    'regime': oos_regimes
+                }, index=out_of_sample_dates)
+                
+                # 두 기간 결합
+                if in_sample_regime is not None:
+                    self.regime_history = pd.concat([in_sample_regime, out_of_sample_regime])
+                else:
+                    self.regime_history = out_of_sample_regime
+            else:
+                self.regime_history = in_sample_regime
         
         if self.regime_history is not None:
             # 체제별 통계
@@ -84,6 +156,14 @@ class UniversalRSWithJumpModel:
             n_changes = regime_changes.sum() - 1
             
             print(f"체제 전환 횟수: {n_changes}회")
+            
+            # Out-of-sample 기간 통계
+            if end_date > self.training_cutoff_date:
+                oos_start = self.training_cutoff_date + timedelta(days=1)
+                oos_regime = self.regime_history[oos_start:]
+                if not oos_regime.empty:
+                    oos_bull_pct = (oos_regime['regime'] == 'BULL').mean() * 100
+                    print(f"Out-of-sample 기간 BULL 비율: {oos_bull_pct:.1f}%")
         
         return self.regime_history
     
@@ -108,7 +188,7 @@ class UniversalRSWithJumpModel:
             return 'BULL'
     
     def backtest(self, start_date, end_date, initial_capital=10000000):
-        """Jump Model을 적용한 백테스트"""
+        """Jump Model을 적용한 백테스트 (Training Cutoff 고려)"""
         
         # Jump Model 비활성화시 기본 RS 전략 실행
         if not self.use_jump_model:
@@ -125,7 +205,8 @@ class UniversalRSWithJumpModel:
             
             return portfolio_df, trades_df, regime_df
         
-        # 1. 체제 데이터 준비
+        # 1. 체제 데이터 준비 (training cutoff 고려)
+        print(f"Training cutoff: {self.training_cutoff_date.strftime('%Y-%m-%d')}")
         self.prepare_regime_data(start_date, end_date)
         
         # 2. RS 전략용 데이터 준비
@@ -154,11 +235,17 @@ class UniversalRSWithJumpModel:
             
             # 현재 체제 확인
             current_regime = self.get_regime_on_date(rebal_date)
-            print(f"현재 시장 체제: {current_regime}")
+            
+            # Out-of-sample 여부 확인
+            is_oos = rebal_date > self.training_cutoff_date
+            oos_indicator = " (Out-of-Sample)" if is_oos else " (In-Sample)"
+            
+            print(f"현재 시장 체제: {current_regime}{oos_indicator}")
             
             regime_log.append({
                 'date': rebal_date,
-                'regime': current_regime
+                'regime': current_regime,
+                'is_out_of_sample': is_oos
             })
             
             # BEAR 체제인 경우 모든 포지션 청산
@@ -195,11 +282,13 @@ class UniversalRSWithJumpModel:
                 dates = pd.date_range(start=rebal_date, end=next_date, freq='D')
                 for date in dates:
                     if date <= end_date:
+                        date_is_oos = date > self.training_cutoff_date
                         portfolio_history.append({
                             'date': date,
                             'value': portfolio_value,
                             'holdings': 0,
-                            'regime': current_regime
+                            'regime': current_regime,
+                            'is_out_of_sample': date_is_oos
                         })
                 continue
             
@@ -225,11 +314,13 @@ class UniversalRSWithJumpModel:
                 dates = pd.date_range(start=rebal_date, end=next_date, freq='D')
                 for date in dates:
                     if date <= end_date:
+                        date_is_oos = date > self.training_cutoff_date
                         portfolio_history.append({
                             'date': date,
                             'value': portfolio_value,
                             'holdings': 0,
-                            'regime': current_regime
+                            'regime': current_regime,
+                            'is_out_of_sample': date_is_oos
                         })
                 continue
             
@@ -289,6 +380,7 @@ class UniversalRSWithJumpModel:
             for date in dates:
                 if date <= end_date:
                     daily_regime = self.get_regime_on_date(date) if self.use_jump_model else 'BULL'
+                    date_is_oos = date > self.training_cutoff_date
                     
                     # BEAR 체제로 전환된 경우 즉시 청산
                     if self.use_jump_model and daily_regime == 'BEAR' and holdings:
@@ -342,7 +434,8 @@ class UniversalRSWithJumpModel:
                         'date': date,
                         'value': portfolio_value,
                         'holdings': len(holdings),
-                        'regime': daily_regime
+                        'regime': daily_regime,
+                        'is_out_of_sample': date_is_oos
                     })
         
         # 결과 정리
@@ -350,15 +443,44 @@ class UniversalRSWithJumpModel:
         trades_df = pd.DataFrame(trade_history)
         regime_df = pd.DataFrame(regime_log).set_index('date')
         
+        # Out-of-sample 통계 출력
+        if self.use_jump_model and not portfolio_df.empty:
+            oos_df = portfolio_df[portfolio_df['is_out_of_sample'] == True]
+            if not oos_df.empty:
+                print(f"\nOut-of-sample 기간: {len(oos_df)}일")
+                print(f"Out-of-sample 비율: {len(oos_df) / len(portfolio_df) * 100:.1f}%")
+        
         return portfolio_df, trades_df, regime_df
     
     def calculate_performance_metrics(self, portfolio_df):
-        """성과 지표 계산"""
+        """성과 지표 계산 (Out-of-sample 정보 포함)"""
         if portfolio_df.empty:
             return {}
         
         # 기본 성과 지표
         metrics = self.rs_strategy.calculate_performance_metrics(portfolio_df)
+        
+        # Training cutoff 정보 추가
+        if self.use_jump_model:
+            metrics['Training Cutoff'] = self.training_cutoff_date.strftime('%Y-%m-%d')
+            
+            # Out-of-sample 기간 분석
+            if 'is_out_of_sample' in portfolio_df.columns:
+                oos_df = portfolio_df[portfolio_df['is_out_of_sample'] == True]
+                in_sample_df = portfolio_df[portfolio_df['is_out_of_sample'] == False]
+                
+                if not oos_df.empty:
+                    oos_days = len(oos_df)
+                    total_days = len(portfolio_df)
+                    metrics['Out-of-Sample Days'] = f"{oos_days}일 ({oos_days/total_days*100:.1f}%)"
+                    
+                    if len(oos_df) > 1:
+                        oos_return = (oos_df['value'].iloc[-1] / oos_df['value'].iloc[0] - 1) * 100
+                        metrics['Out-of-Sample Return'] = f"{oos_return:.2f}%"
+                
+                if not in_sample_df.empty:
+                    in_sample_days = len(in_sample_df)
+                    metrics['In-Sample Days'] = f"{in_sample_days}일 ({in_sample_days/total_days*100:.1f}%)"
         
         # 체제별 성과 분석
         if self.use_jump_model and 'regime' in portfolio_df.columns:
