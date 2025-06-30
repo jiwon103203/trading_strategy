@@ -1,7 +1,7 @@
 """
-실시간 모니터링 대시보드
+실시간 모니터링 대시보드 - 전체 ETF 버전
 웹 기반 인터랙티브 대시보드 (Streamlit 사용)
-완전히 수정된 버전 - pandas Series truth value 문제 해결
+전체 ETF 지원 + 종합 Bull/Bear 상태 모니터링
 """
 
 import streamlit as st
@@ -15,10 +15,12 @@ from preset_manager import PresetManager
 from universal_rs_strategy import UniversalRSStrategy
 from universal_jump_model import UniversalJumpModel
 from universal_rs_with_jump import UniversalRSWithJumpModel
+import concurrent.futures
+from threading import Lock
 
 # Streamlit 페이지 설정
 st.set_page_config(
-    page_title="Universal RS Strategy Dashboard",
+    page_title="Universal RS Strategy Dashboard - Full Edition",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -41,25 +43,48 @@ st.markdown("""
     color: #ff0000;
     font-weight: bold;
 }
-.colab-warning {
-    background-color: #fff3cd;
-    border: 1px solid #ffeaa7;
-    color: #856404;
+.regime-card {
+    background-color: #ffffff;
+    border: 2px solid #ddd;
+    border-radius: 10px;
     padding: 15px;
-    border-radius: 5px;
     margin: 10px 0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.bull-card {
+    border-color: #28a745;
+    background-color: #f8fff9;
+}
+.bear-card {
+    border-color: #dc3545;
+    background-color: #fff8f8;
+}
+.strategy-header {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+.etf-item {
+    padding: 8px;
+    margin: 5px 0;
+    border-radius: 5px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.etf-bull {
+    background-color: #d4edda;
+    border-left: 4px solid #28a745;
+}
+.etf-bear {
+    background-color: #f8d7da;
+    border-left: 4px solid #dc3545;
+}
+.etf-unknown {
+    background-color: #fff3cd;
+    border-left: 4px solid #ffc107;
 }
 </style>
-""", unsafe_allow_html=True)
-
-# Colab 환경 알림
-st.markdown("""
-<div class="colab-warning">
-🔬 <strong>Running on Google Colab</strong><br>
-• 데이터 로딩에 시간이 걸릴 수 있습니다<br>
-• 세션 유지를 위해 정기적으로 상호작용 해주세요<br>
-• 중요한 백테스트 결과는 다운로드 받으세요
-</div>
 """, unsafe_allow_html=True)
 
 def safe_data_check(data):
@@ -77,7 +102,6 @@ def safe_data_check(data):
         if isinstance(data, list):
             return len(data) > 0
             
-        # 기타 객체는 None이 아니면 True
         return data is not None
         
     except Exception:
@@ -101,8 +125,8 @@ def safe_get_value(value, default=0):
     except Exception:
         return default
 
-class RealtimeDashboard:
-    """실시간 모니터링 대시보드 - 안전한 버전"""
+class EnhancedRealtimeDashboard:
+    """실시간 모니터링 대시보드 - 전체 ETF 버전"""
     
     def __init__(self):
         # 세션 상태 초기화
@@ -112,80 +136,31 @@ class RealtimeDashboard:
             st.session_state.last_update = None
         if 'portfolio_data' not in st.session_state:
             st.session_state.portfolio_data = None
+        if 'regime_cache' not in st.session_state:
+            st.session_state.regime_cache = {}
+        if 'cache_timestamp' not in st.session_state:
+            st.session_state.cache_timestamp = None
         
-        # Colab 최적화된 프리셋 목록
+        # 전체 프리셋 목록 (제한 없음)
         self.presets = {
-            'S&P 500 Sectors (Top 6)': self.get_limited_sp500(),
-            'KOSPI Sectors (Top 4)': self.get_limited_kospi(),
-            'Major Countries': self.get_major_countries(),
-            'Global Sectors (Top 4)': self.get_limited_global(),
-            'Single ETF Test': self.get_single_etf()
+            'S&P 500 Sectors': PresetManager.get_sp500_sectors(),
+            'KOSPI Sectors': PresetManager.get_kospi_sectors(),
+            'MSCI Countries': PresetManager.get_msci_countries(),
+            'Europe Sectors': PresetManager.get_europe_sectors(),
+            'Global Sectors': PresetManager.get_global_sectors(),
+            'Emerging Markets': PresetManager.get_emerging_markets(),
+            'Commodity Sectors': PresetManager.get_commodity_sectors(),
+            'Factor ETFs': PresetManager.get_factor_etfs(),
+            'Thematic ETFs': PresetManager.get_thematic_etfs()
         }
-    
-    def get_limited_sp500(self):
-        """Colab용 제한된 S&P 500 섹터"""
-        try:
-            full_preset = PresetManager.get_sp500_sectors()
-            limited_components = dict(list(full_preset['components'].items())[:6])
-            return {
-                'name': 'S&P 500 Sectors (Limited)',
-                'benchmark': full_preset['benchmark'],
-                'components': limited_components
-            }
-        except Exception:
-            return self.get_single_etf()
-    
-    def get_limited_kospi(self):
-        """Colab용 제한된 KOSPI 섹터"""
-        try:
-            full_preset = PresetManager.get_kospi_sectors()
-            limited_components = dict(list(full_preset['components'].items())[:4])
-            return {
-                'name': 'KOSPI Sectors (Limited)',
-                'benchmark': full_preset['benchmark'],
-                'components': limited_components
-            }
-        except Exception:
-            return self.get_single_etf()
-    
-    def get_major_countries(self):
-        """주요 국가 ETF만"""
-        return {
-            'name': 'Major Countries Strategy',
-            'benchmark': 'URTH',
-            'components': {
-                'EWJ': 'Japan',
-                'EWG': 'Germany',
-                'EWU': 'United Kingdom',
-                'EWC': 'Canada'
-            }
-        }
-    
-    def get_limited_global(self):
-        """제한된 글로벌 섹터"""
-        try:
-            full_preset = PresetManager.get_global_sectors()
-            limited_components = dict(list(full_preset['components'].items())[:4])
-            return {
-                'name': 'Global Sectors (Limited)',
-                'benchmark': full_preset['benchmark'],
-                'components': limited_components
-            }
-        except Exception:
-            return self.get_single_etf()
-    
-    def get_single_etf(self):
-        """단일 ETF 테스트"""
-        return {
-            'name': 'Single ETF Test',
-            'benchmark': '^GSPC',
-            'components': {'SPY': 'SPDR S&P 500 ETF'}
-        }
+        
+        # 캐시 유효 시간 (30분)
+        self.cache_duration = timedelta(minutes=30)
     
     def run(self):
         """대시보드 실행"""
-        st.title("🚀 Universal RS Strategy Dashboard")
-        st.markdown("### Real-time Market Monitoring & Signal Generation (Colab Edition)")
+        st.title("🚀 Universal RS Strategy Dashboard - Full Edition")
+        st.markdown("### Real-time Market Monitoring & Signal Generation (All ETFs)")
         
         # 사이드바
         self.create_sidebar()
@@ -197,7 +172,7 @@ class RealtimeDashboard:
             st.info("👈 Please select a strategy preset from the sidebar to begin")
     
     def create_sidebar(self):
-        """사이드바 생성 - Colab 최적화"""
+        """사이드바 생성"""
         st.sidebar.header("Configuration")
         
         # 프리셋 선택
@@ -211,16 +186,16 @@ class RealtimeDashboard:
             st.session_state.selected_preset = self.presets[preset_name]
             st.session_state.preset_name = preset_name
         
-        # 전략 파라미터 (Colab 최적화)
+        # 전략 파라미터
         st.sidebar.subheader("Strategy Parameters")
         
         col1, col2 = st.sidebar.columns(2)
         with col1:
-            rs_length = st.number_input("RS Length", value=15, min_value=10, max_value=30)
-            use_jump = st.checkbox("Use Jump Model", value=False)  # 기본값 비활성화
+            rs_length = st.number_input("RS Length", value=20, min_value=10, max_value=50)
+            use_jump = st.checkbox("Use Jump Model", value=True)
         
         with col2:
-            timeframe = st.selectbox("Timeframe", ["daily"])  # weekly 제거
+            timeframe = st.selectbox("Timeframe", ["daily", "weekly"])
             use_cross = st.checkbox("Use Cross Filter", value=False)
         
         if use_cross:
@@ -228,9 +203,9 @@ class RealtimeDashboard:
         else:
             cross_days = None
         
-        # 백테스트 설정 (기간 단축)
+        # 백테스트 설정
         st.sidebar.subheader("Backtest Settings")
-        backtest_years = st.sidebar.slider("Backtest Period (Years)", 1, 3, 2)
+        backtest_years = st.sidebar.slider("Backtest Period (Years)", 1, 5, 3)
         
         # 실행 버튼
         col1, col2 = st.sidebar.columns(2)
@@ -242,8 +217,11 @@ class RealtimeDashboard:
             if st.button("📊 Backtest"):
                 self.run_backtest(rs_length, timeframe, cross_days, use_jump, backtest_years)
         
-        # Colab 전용 기능
-        st.sidebar.subheader("Colab Utils")
+        # 추가 기능
+        st.sidebar.subheader("Advanced Features")
+        if st.sidebar.button("🌍 Refresh All Regimes"):
+            self.refresh_all_regimes()
+        
         if st.sidebar.button("💾 Download Results"):
             self.download_results()
         
@@ -267,9 +245,9 @@ class RealtimeDashboard:
         with col3:
             st.metric("Components", len(preset['components']))
         
-        # 탭 생성 (Colab에서는 3개만)
-        tab1, tab2, tab3 = st.tabs([
-            "📈 Market Status", "🎯 Current Signals", "📊 Backtest Results"
+        # 탭 생성 (전체 regime 모니터링 탭 추가)
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📈 Market Status", "🎯 Current Signals", "🌍 All Market Regimes", "📊 Backtest Results"
         ])
         
         with tab1:
@@ -279,15 +257,17 @@ class RealtimeDashboard:
             self.display_current_signals()
         
         with tab3:
+            self.display_all_market_regimes()
+        
+        with tab4:
             self.display_backtest_results()
     
     def display_market_status(self):
-        """시장 상태 표시 - 안전한 버전"""
+        """시장 상태 표시"""
         st.subheader("Market Regime Analysis")
         
         preset = st.session_state.selected_preset
         
-        # 안전한 Jump Model 분석
         if st.button("🔍 Analyze Market Regime"):
             with st.spinner("Analyzing market regime..."):
                 try:
@@ -324,10 +304,10 @@ class RealtimeDashboard:
                         
                 except Exception as e:
                     st.error(f"Market regime analysis failed: {str(e)}")
-                    st.info("💡 Try using 'Single ETF Test' preset for more stable analysis")
+                    st.info("💡 Check your internet connection or try again later")
     
     def display_current_signals(self):
-        """현재 투자 신호 표시 - 완전히 안전한 버전"""
+        """현재 투자 신호 표시"""
         st.subheader("Current Investment Signals")
         
         preset = st.session_state.selected_preset
@@ -342,13 +322,13 @@ class RealtimeDashboard:
                         name=preset['name']
                     )
                     
-                    # 데이터 가져오기 (기간 단축)
+                    # 데이터 가져오기
                     end_date = datetime.now()
-                    start_date = end_date - timedelta(days=60)
+                    start_date = end_date - timedelta(days=120)
                     
                     price_data, benchmark_data = strategy.get_price_data(start_date, end_date)
                     
-                    # 🔧 핵심 수정: 안전한 데이터 검증
+                    # 안전한 데이터 검증
                     price_data_ok = safe_data_check(price_data)
                     benchmark_data_ok = safe_data_check(benchmark_data)
                     
@@ -373,7 +353,7 @@ class RealtimeDashboard:
                             with col1:
                                 # RS Ratio 바 차트
                                 fig_ratio = px.bar(
-                                    signals_df.head(10),
+                                    signals_df.head(15),
                                     x='name',
                                     y='rs_ratio',
                                     title='Top Components by RS-Ratio',
@@ -381,12 +361,13 @@ class RealtimeDashboard:
                                     color_continuous_scale='RdYlGn'
                                 )
                                 fig_ratio.add_hline(y=100, line_dash="dash", line_color="black")
+                                fig_ratio.update_xaxes(tickangle=45)
                                 st.plotly_chart(fig_ratio, use_container_width=True)
                             
                             with col2:
                                 # RS Momentum 바 차트
                                 fig_momentum = px.bar(
-                                    signals_df.head(10),
+                                    signals_df.head(15),
                                     x='name',
                                     y='rs_momentum',
                                     title='Top Components by RS-Momentum',
@@ -394,6 +375,7 @@ class RealtimeDashboard:
                                     color_continuous_scale='RdYlGn'
                                 )
                                 fig_momentum.add_hline(y=100, line_dash="dash", line_color="black")
+                                fig_momentum.update_xaxes(tickangle=45)
                                 st.plotly_chart(fig_momentum, use_container_width=True)
                             
                             # 투자 권고
@@ -409,7 +391,311 @@ class RealtimeDashboard:
                             
                 except Exception as e:
                     st.error(f"Signal analysis failed: {str(e)}")
-                    st.info("💡 Try using a simpler preset or check your internet connection")
+                    st.info("💡 Check your internet connection or try a simpler analysis")
+    
+    def analyze_single_etf_regime(self, ticker, name):
+        """단일 ETF의 시장 체제 분석"""
+        try:
+            jump_model = UniversalJumpModel(
+                benchmark_ticker=ticker,
+                benchmark_name=name,
+                jump_penalty=50.0
+            )
+            
+            current_regime = jump_model.get_current_regime()
+            
+            if current_regime:
+                return {
+                    'ticker': ticker,
+                    'name': name,
+                    'regime': current_regime['regime'],
+                    'confidence': current_regime['confidence'],
+                    'status': 'success'
+                }
+            else:
+                return {
+                    'ticker': ticker,
+                    'name': name,
+                    'regime': 'UNKNOWN',
+                    'confidence': 0.0,
+                    'status': 'no_data'
+                }
+        except Exception as e:
+            return {
+                'ticker': ticker,
+                'name': name,
+                'regime': 'ERROR',
+                'confidence': 0.0,
+                'status': 'error',
+                'error': str(e)
+            }
+    
+    def analyze_all_etf_regimes(self):
+        """모든 ETF의 시장 체제 병렬 분석"""
+        # 모든 전략의 모든 ETF 수집
+        all_etfs = {}
+        for strategy_name, preset in self.presets.items():
+            for ticker, name in preset['components'].items():
+                if ticker not in all_etfs:
+                    all_etfs[ticker] = {
+                        'name': name,
+                        'strategies': [strategy_name]
+                    }
+                else:
+                    all_etfs[ticker]['strategies'].append(strategy_name)
+        
+        # 벤치마크도 추가
+        benchmarks = {}
+        for strategy_name, preset in self.presets.items():
+            benchmark = preset['benchmark']
+            if benchmark not in benchmarks:
+                benchmarks[benchmark] = f"{strategy_name} Benchmark"
+        
+        # 캐시 확인
+        now = datetime.now()
+        if (st.session_state.cache_timestamp and 
+            now - st.session_state.cache_timestamp < self.cache_duration and
+            st.session_state.regime_cache):
+            return st.session_state.regime_cache
+        
+        results = {}
+        
+        # 진행 상황 표시
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        total_items = len(all_etfs) + len(benchmarks)
+        processed = 0
+        
+        # 벤치마크 분석
+        status_text.text("Analyzing benchmarks...")
+        for ticker, name in benchmarks.items():
+            result = self.analyze_single_etf_regime(ticker, name)
+            results[ticker] = result
+            results[ticker]['type'] = 'benchmark'
+            
+            processed += 1
+            progress_bar.progress(processed / total_items)
+        
+        # ETF 분석 (배치로 처리)
+        status_text.text("Analyzing ETFs...")
+        batch_size = 5  # 동시에 처리할 ETF 수
+        etf_items = list(all_etfs.items())
+        
+        for i in range(0, len(etf_items), batch_size):
+            batch = etf_items[i:i+batch_size]
+            
+            # 병렬 처리
+            with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
+                futures = []
+                for ticker, info in batch:
+                    future = executor.submit(self.analyze_single_etf_regime, ticker, info['name'])
+                    futures.append((ticker, info, future))
+                
+                for ticker, info, future in futures:
+                    try:
+                        result = future.result(timeout=30)  # 30초 타임아웃
+                        result['type'] = 'etf'
+                        result['strategies'] = info['strategies']
+                        results[ticker] = result
+                    except Exception as e:
+                        results[ticker] = {
+                            'ticker': ticker,
+                            'name': info['name'],
+                            'regime': 'TIMEOUT',
+                            'confidence': 0.0,
+                            'status': 'timeout',
+                            'type': 'etf',
+                            'strategies': info['strategies']
+                        }
+                    
+                    processed += 1
+                    progress_bar.progress(processed / total_items)
+        
+        # 캐시 업데이트
+        st.session_state.regime_cache = results
+        st.session_state.cache_timestamp = now
+        
+        progress_bar.empty()
+        status_text.empty()
+        
+        return results
+    
+    def display_all_market_regimes(self):
+        """모든 시장 체제 현황 표시"""
+        st.subheader("🌍 All Market Regimes Overview")
+        st.markdown("Current Bull/Bear status for all ETFs across all strategies")
+        
+        if st.button("🔄 Analyze All Market Regimes", type="primary"):
+            with st.spinner("Analyzing all market regimes... This may take a few minutes"):
+                results = self.analyze_all_etf_regimes()
+                
+                if results:
+                    # 통계 요약
+                    bull_count = sum(1 for r in results.values() if r['regime'] == 'BULL')
+                    bear_count = sum(1 for r in results.values() if r['regime'] == 'BEAR')
+                    unknown_count = sum(1 for r in results.values() if r['regime'] in ['UNKNOWN', 'ERROR', 'TIMEOUT'])
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Total Assets", len(results))
+                    with col2:
+                        st.metric("🟢 BULL", bull_count)
+                    with col3:
+                        st.metric("🔴 BEAR", bear_count)
+                    with col4:
+                        st.metric("⚠️ Unknown", unknown_count)
+                    
+                    # 전략별 정리
+                    st.subheader("📊 By Strategy")
+                    
+                    for strategy_name, preset in self.presets.items():
+                        with st.expander(f"{strategy_name} ({len(preset['components'])} ETFs)"):
+                            
+                            # 벤치마크 상태
+                            benchmark_ticker = preset['benchmark']
+                            if benchmark_ticker in results:
+                                benchmark_result = results[benchmark_ticker]
+                                regime_class = f"{benchmark_result['regime'].lower()}-card" if benchmark_result['regime'] in ['BULL', 'BEAR'] else "unknown-card"
+                                
+                                st.markdown(f"""
+                                <div class="regime-card {regime_class}">
+                                    <div class="strategy-header">📊 Benchmark: {benchmark_result['name']}</div>
+                                    <div><strong>Regime:</strong> {benchmark_result['regime']} 
+                                    {'(Confidence: ' + f"{benchmark_result['confidence']:.1%}" + ')' if benchmark_result['confidence'] > 0 else ''}</div>
+                                </div>
+                                """, unsafe_allow_html=True)
+                            
+                            # ETF 목록
+                            st.markdown("**Components:**")
+                            
+                            bull_etfs = []
+                            bear_etfs = []
+                            unknown_etfs = []
+                            
+                            for ticker, name in preset['components'].items():
+                                if ticker in results:
+                                    result = results[ticker]
+                                    if result['regime'] == 'BULL':
+                                        bull_etfs.append(result)
+                                    elif result['regime'] == 'BEAR':
+                                        bear_etfs.append(result)
+                                    else:
+                                        unknown_etfs.append(result)
+                                else:
+                                    unknown_etfs.append({
+                                        'ticker': ticker,
+                                        'name': name,
+                                        'regime': 'NOT_ANALYZED',
+                                        'confidence': 0.0
+                                    })
+                            
+                            # BULL ETFs
+                            if bull_etfs:
+                                st.markdown("🟢 **BULL Regime:**")
+                                for etf in bull_etfs:
+                                    confidence_text = f" (Confidence: {etf['confidence']:.1%})" if etf['confidence'] > 0 else ""
+                                    st.markdown(f"""
+                                    <div class="etf-item etf-bull">
+                                        <span><strong>{etf['ticker']}</strong> - {etf['name']}</span>
+                                        <span>{etf['regime']}{confidence_text}</span>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                            
+                            # BEAR ETFs
+                            if bear_etfs:
+                                st.markdown("🔴 **BEAR Regime:**")
+                                for etf in bear_etfs:
+                                    confidence_text = f" (Confidence: {etf['confidence']:.1%})" if etf['confidence'] > 0 else ""
+                                    st.markdown(f"""
+                                    <div class="etf-item etf-bear">
+                                        <span><strong>{etf['ticker']}</strong> - {etf['name']}</span>
+                                        <span>{etf['regime']}{confidence_text}</span>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                            
+                            # Unknown ETFs
+                            if unknown_etfs:
+                                st.markdown("⚠️ **Unknown/Error:**")
+                                for etf in unknown_etfs:
+                                    st.markdown(f"""
+                                    <div class="etf-item etf-unknown">
+                                        <span><strong>{etf['ticker']}</strong> - {etf['name']}</span>
+                                        <span>{etf['regime']}</span>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                    
+                    # 종합 차트
+                    st.subheader("📈 Regime Distribution")
+                    
+                    # 파이 차트
+                    fig_pie = go.Figure(data=[go.Pie(
+                        labels=['BULL', 'BEAR', 'Unknown'],
+                        values=[bull_count, bear_count, unknown_count],
+                        marker_colors=['#28a745', '#dc3545', '#ffc107']
+                    )])
+                    fig_pie.update_layout(title="Overall Market Regime Distribution")
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                    
+                    # 전략별 요약 차트
+                    strategy_data = []
+                    for strategy_name, preset in self.presets.items():
+                        strategy_bull = 0
+                        strategy_bear = 0
+                        strategy_unknown = 0
+                        
+                        for ticker in preset['components'].keys():
+                            if ticker in results:
+                                regime = results[ticker]['regime']
+                                if regime == 'BULL':
+                                    strategy_bull += 1
+                                elif regime == 'BEAR':
+                                    strategy_bear += 1
+                                else:
+                                    strategy_unknown += 1
+                            else:
+                                strategy_unknown += 1
+                        
+                        strategy_data.append({
+                            'Strategy': strategy_name,
+                            'BULL': strategy_bull,
+                            'BEAR': strategy_bear,
+                            'Unknown': strategy_unknown
+                        })
+                    
+                    strategy_df = pd.DataFrame(strategy_data)
+                    
+                    fig_strategy = go.Figure()
+                    fig_strategy.add_trace(go.Bar(name='BULL', x=strategy_df['Strategy'], y=strategy_df['BULL'], marker_color='#28a745'))
+                    fig_strategy.add_trace(go.Bar(name='BEAR', x=strategy_df['Strategy'], y=strategy_df['BEAR'], marker_color='#dc3545'))
+                    fig_strategy.add_trace(go.Bar(name='Unknown', x=strategy_df['Strategy'], y=strategy_df['Unknown'], marker_color='#ffc107'))
+                    
+                    fig_strategy.update_layout(
+                        title='Regime Distribution by Strategy',
+                        barmode='stack',
+                        xaxis_title='Strategy',
+                        yaxis_title='Number of ETFs'
+                    )
+                    fig_strategy.update_xaxes(tickangle=45)
+                    st.plotly_chart(fig_strategy, use_container_width=True)
+                    
+                    st.success(f"✅ Analysis completed! {len(results)} assets analyzed.")
+                else:
+                    st.error("❌ Failed to analyze market regimes")
+        else:
+            # 캐시된 결과 표시
+            if st.session_state.regime_cache and st.session_state.cache_timestamp:
+                cache_age = datetime.now() - st.session_state.cache_timestamp
+                st.info(f"📋 Cached results available (Updated {cache_age.seconds//60} minutes ago). Click 'Analyze' to refresh.")
+    
+    def refresh_all_regimes(self):
+        """모든 체제 정보 새로고침"""
+        try:
+            st.session_state.regime_cache = {}
+            st.session_state.cache_timestamp = None
+            st.success("✅ Regime cache cleared! Click 'All Market Regimes' tab and 'Analyze' to refresh.")
+        except Exception as e:
+            st.error(f"Cache refresh failed: {str(e)}")
     
     def update_data(self, rs_length, timeframe, cross_days, use_jump):
         """데이터 업데이트"""
@@ -420,7 +706,7 @@ class RealtimeDashboard:
             st.error(f"Update failed: {str(e)}")
     
     def run_backtest(self, rs_length, timeframe, cross_days, use_jump, years):
-        """백테스트 실행 - 안전한 버전"""
+        """백테스트 실행"""
         preset = st.session_state.selected_preset
         
         with st.spinner('Running backtest... This may take a few minutes'):
@@ -438,7 +724,6 @@ class RealtimeDashboard:
                 
                 portfolio_df, trades_df, regime_df = strategy.backtest(start_date, end_date)
                 
-                # 안전한 결과 검증
                 if safe_data_check(portfolio_df):
                     st.session_state.portfolio_data = {
                         'portfolio': portfolio_df,
@@ -452,7 +737,7 @@ class RealtimeDashboard:
                     
             except Exception as e:
                 st.error(f"Backtest failed: {str(e)}")
-                st.info("💡 Try reducing the backtest period or using a simpler preset")
+                st.info("💡 Try reducing the backtest period or check your internet connection")
     
     def display_backtest_results(self):
         """백테스트 결과 표시"""
@@ -497,6 +782,12 @@ class RealtimeDashboard:
             )
             
             st.plotly_chart(fig, use_container_width=True)
+            
+            # 상세 메트릭스 테이블
+            if metrics:
+                st.subheader("Detailed Metrics")
+                metrics_df = pd.DataFrame(list(metrics.items()), columns=['Metric', 'Value'])
+                st.dataframe(metrics_df, use_container_width=True)
         else:
             st.warning("Portfolio data not available for charting")
     
@@ -510,7 +801,7 @@ class RealtimeDashboard:
                     st.download_button(
                         label="📥 Download Portfolio Data",
                         data=csv,
-                        file_name=f"colab_portfolio_{datetime.now().strftime('%Y%m%d')}.csv",
+                        file_name=f"portfolio_{datetime.now().strftime('%Y%m%d')}.csv",
                         mime="text/csv"
                     )
                 else:
@@ -525,7 +816,9 @@ class RealtimeDashboard:
         try:
             st.session_state.portfolio_data = None
             st.session_state.last_update = None
-            st.success("✅ Cache cleared!")
+            st.session_state.regime_cache = {}
+            st.session_state.cache_timestamp = None
+            st.success("✅ All cache cleared!")
         except Exception as e:
             st.error(f"Cache clear failed: {str(e)}")
 
@@ -533,7 +826,7 @@ class RealtimeDashboard:
 # Streamlit 앱 실행
 def main():
     try:
-        dashboard = RealtimeDashboard()
+        dashboard = EnhancedRealtimeDashboard()
         dashboard.run()
     except Exception as e:
         st.error(f"Dashboard initialization failed: {str(e)}")
