@@ -2,6 +2,7 @@
 실시간 모니터링 대시보드 - 전체 ETF 버전
 웹 기반 인터랙티브 대시보드 (Streamlit 사용)
 전체 ETF 지원 + 종합 Bull/Bear 상태 모니터링
+2024년까지 학습, 2025년 추론 모델 적용
 """
 
 import streamlit as st
@@ -161,6 +162,7 @@ class EnhancedRealtimeDashboard:
         """대시보드 실행"""
         st.title("🚀 Universal RS Strategy Dashboard - Full Edition")
         st.markdown("### Real-time Market Monitoring & Signal Generation (All ETFs)")
+        st.markdown("**🎯 Training Period**: 2005-2024 (20 years) | **🔮 Inference**: 2025 (Out-of-Sample Prediction)**")
         
         # 사이드바
         self.create_sidebar()
@@ -265,6 +267,7 @@ class EnhancedRealtimeDashboard:
     def display_market_status(self):
         """시장 상태 표시"""
         st.subheader("Market Regime Analysis")
+        st.markdown("**Training Period**: 2005-2024 | **Inference Period**: 2025 (Out-of-Sample)")
         
         preset = st.session_state.selected_preset
         
@@ -273,17 +276,19 @@ class EnhancedRealtimeDashboard:
                 try:
                     jump_model = UniversalJumpModel(
                         benchmark_ticker=preset['benchmark'],
-                        benchmark_name=preset['name']
+                        benchmark_name=preset['name'],
+                        training_cutoff_date=datetime(2024, 12, 31)
                     )
                     
-                    current_regime = jump_model.get_current_regime()
+                    current_regime = jump_model.get_current_regime_with_training_cutoff()
                     
                     if current_regime:
                         col1, col2, col3, col4 = st.columns(4)
                         
                         with col1:
                             regime_emoji = "🟢" if current_regime['regime'] == 'BULL' else "🔴"
-                            st.metric("Current Regime", f"{regime_emoji} {current_regime['regime']}")
+                            oos_indicator = "🔮" if current_regime.get('is_out_of_sample', False) else "📚"
+                            st.metric("Current Regime", f"{regime_emoji} {current_regime['regime']} {oos_indicator}")
                         
                         with col2:
                             confidence = safe_get_value(current_regime['confidence'], 0.5)
@@ -298,7 +303,16 @@ class EnhancedRealtimeDashboard:
                             dd = safe_get_value(features.get('max_drawdown', 0), 0) * 100
                             st.metric("Drawdown", f"{dd:.1f}%")
                         
+                        # 추가 정보 표시
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.info(f"📅 Analysis Date: {current_regime['date'].strftime('%Y-%m-%d')}")
+                        with col2:
+                            oos_status = "Out-of-Sample Prediction" if current_regime.get('is_out_of_sample', False) else "In-Sample Analysis"
+                            st.info(f"🔮 Status: {oos_status}")
+                        
                         st.success("✅ Market regime analysis completed!")
+                        st.caption(f"🔮 = Out-of-Sample (2025 data) | 📚 = In-Sample (≤2024 data)")
                     else:
                         st.error("❌ Unable to analyze market regime")
                         
@@ -309,13 +323,43 @@ class EnhancedRealtimeDashboard:
     def display_current_signals(self):
         """현재 투자 신호 표시"""
         st.subheader("Current Investment Signals")
+        st.markdown("**Model Training**: 2005-2024 | **Current Analysis**: Out-of-Sample Prediction")
         
         preset = st.session_state.selected_preset
         
         if st.button("🎯 Analyze Investment Signals"):
             with st.spinner('Analyzing components...'):
                 try:
-                    # RS 전략 분석
+                    # 먼저 시장 체제 확인 (2024년까지 학습)
+                    jump_model = UniversalJumpModel(
+                        benchmark_ticker=preset['benchmark'],
+                        benchmark_name=preset['name'],
+                        training_cutoff_date=datetime(2024, 12, 31)
+                    )
+                    
+                    current_regime = jump_model.get_current_regime_with_training_cutoff()
+                    
+                    if current_regime:
+                        # 체제 정보 표시
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            regime_emoji = "🟢" if current_regime['regime'] == 'BULL' else "🔴"
+                            oos_indicator = "🔮" if current_regime.get('is_out_of_sample', False) else "📚"
+                            st.metric("Market Regime", f"{regime_emoji} {current_regime['regime']} {oos_indicator}")
+                        with col2:
+                            confidence = safe_get_value(current_regime['confidence'], 0.5)
+                            st.metric("Confidence", f"{confidence:.1%}")
+                        with col3:
+                            analysis_status = "Out-of-Sample" if current_regime.get('is_out_of_sample', False) else "In-Sample"
+                            st.metric("Prediction Type", analysis_status)
+                        
+                        # BEAR 체제인 경우 투자 중단 권고
+                        if current_regime['regime'] == 'BEAR':
+                            st.error("🔴 **BEAR Market Detected** - Investment suspension recommended")
+                            st.markdown("The model suggests avoiding new investments in current market conditions.")
+                            return
+                    
+                    # RS 전략 분석 (BULL 체제이거나 체제 분석이 불가능한 경우)
                     strategy = UniversalRSStrategy(
                         benchmark=preset['benchmark'],
                         components=preset['components'],
@@ -340,6 +384,12 @@ class EnhancedRealtimeDashboard:
                             signals_df = pd.DataFrame(selected)
                             signals_df['RS_Score'] = (signals_df['rs_ratio'] + signals_df['rs_momentum']) / 2
                             signals_df = signals_df.sort_values('RS_Score', ascending=False)
+                            
+                            # 투자 권고 메시지
+                            if current_regime and current_regime['regime'] == 'BULL':
+                                st.success(f"🟢 **BULL Market + {len(selected)} Strong Components** - Investment execution recommended!")
+                            else:
+                                st.info(f"📊 **{len(selected)} Components** meet RS criteria (Market regime analysis unavailable)")
                             
                             # 테이블 표시
                             st.dataframe(
@@ -378,10 +428,10 @@ class EnhancedRealtimeDashboard:
                                 fig_momentum.update_xaxes(tickangle=45)
                                 st.plotly_chart(fig_momentum, use_container_width=True)
                             
-                            # 투자 권고
-                            st.success(f"✅ **Investment Recommendation**: {len(selected)} components meet the criteria for investment")
                         else:
                             st.warning("⚠️ No components currently meet the investment criteria")
+                            if current_regime and current_regime['regime'] == 'BULL':
+                                st.info("Even in BULL market, no strong RS signals detected. Consider waiting for better opportunities.")
                     else:
                         st.error("❌ Unable to fetch market data")
                         if not price_data_ok:
@@ -394,15 +444,16 @@ class EnhancedRealtimeDashboard:
                     st.info("💡 Check your internet connection or try a simpler analysis")
     
     def analyze_single_etf_regime(self, ticker, name):
-        """단일 ETF의 시장 체제 분석"""
+        """단일 ETF의 시장 체제 분석 - 2024년까지 학습"""
         try:
             jump_model = UniversalJumpModel(
                 benchmark_ticker=ticker,
                 benchmark_name=name,
-                jump_penalty=50.0
+                jump_penalty=50.0,
+                training_cutoff_date=datetime(2024, 12, 31)
             )
             
-            current_regime = jump_model.get_current_regime()
+            current_regime = jump_model.get_current_regime_with_training_cutoff()
             
             if current_regime:
                 return {
@@ -410,6 +461,8 @@ class EnhancedRealtimeDashboard:
                     'name': name,
                     'regime': current_regime['regime'],
                     'confidence': current_regime['confidence'],
+                    'is_out_of_sample': current_regime.get('is_out_of_sample', False),
+                    'analysis_date': current_regime['date'].strftime('%Y-%m-%d'),
                     'status': 'success'
                 }
             else:
@@ -418,6 +471,8 @@ class EnhancedRealtimeDashboard:
                     'name': name,
                     'regime': 'UNKNOWN',
                     'confidence': 0.0,
+                    'is_out_of_sample': False,
+                    'analysis_date': 'N/A',
                     'status': 'no_data'
                 }
         except Exception as e:
@@ -426,6 +481,8 @@ class EnhancedRealtimeDashboard:
                 'name': name,
                 'regime': 'ERROR',
                 'confidence': 0.0,
+                'is_out_of_sample': False,
+                'analysis_date': 'N/A',
                 'status': 'error',
                 'error': str(e)
             }
@@ -525,6 +582,7 @@ class EnhancedRealtimeDashboard:
         """모든 시장 체제 현황 표시"""
         st.subheader("🌍 All Market Regimes Overview")
         st.markdown("Current Bull/Bear status for all ETFs across all strategies")
+        st.markdown("**🎯 Model Training**: 2005-2024 (20 years) | **🔮 Inference**: 2025 (Out-of-Sample)**")
         
         if st.button("🔄 Analyze All Market Regimes", type="primary"):
             with st.spinner("Analyzing all market regimes... This may take a few minutes"):
@@ -535,8 +593,9 @@ class EnhancedRealtimeDashboard:
                     bull_count = sum(1 for r in results.values() if r['regime'] == 'BULL')
                     bear_count = sum(1 for r in results.values() if r['regime'] == 'BEAR')
                     unknown_count = sum(1 for r in results.values() if r['regime'] in ['UNKNOWN', 'ERROR', 'TIMEOUT'])
+                    oos_count = sum(1 for r in results.values() if r.get('is_out_of_sample', False))
                     
-                    col1, col2, col3, col4 = st.columns(4)
+                    col1, col2, col3, col4, col5 = st.columns(5)
                     with col1:
                         st.metric("Total Assets", len(results))
                     with col2:
@@ -545,6 +604,8 @@ class EnhancedRealtimeDashboard:
                         st.metric("🔴 BEAR", bear_count)
                     with col4:
                         st.metric("⚠️ Unknown", unknown_count)
+                    with col5:
+                        st.metric("🔮 Out-of-Sample", oos_count)
                     
                     # 전략별 정리
                     st.subheader("📊 By Strategy")
@@ -558,11 +619,15 @@ class EnhancedRealtimeDashboard:
                                 benchmark_result = results[benchmark_ticker]
                                 regime_class = f"{benchmark_result['regime'].lower()}-card" if benchmark_result['regime'] in ['BULL', 'BEAR'] else "unknown-card"
                                 
+                                oos_indicator = "🔮" if benchmark_result.get('is_out_of_sample', False) else "📚"
+                                confidence_text = f"(Confidence: {benchmark_result['confidence']:.1%})" if benchmark_result['confidence'] > 0 else ""
+                                analysis_date = benchmark_result.get('analysis_date', 'N/A')
+                                
                                 st.markdown(f"""
                                 <div class="regime-card {regime_class}">
-                                    <div class="strategy-header">📊 Benchmark: {benchmark_result['name']}</div>
-                                    <div><strong>Regime:</strong> {benchmark_result['regime']} 
-                                    {'(Confidence: ' + f"{benchmark_result['confidence']:.1%}" + ')' if benchmark_result['confidence'] > 0 else ''}</div>
+                                    <div class="strategy-header">📊 Benchmark: {benchmark_result['name']} {oos_indicator}</div>
+                                    <div><strong>Regime:</strong> {benchmark_result['regime']} {confidence_text}</div>
+                                    <div><strong>Analysis Date:</strong> {analysis_date}</div>
                                 </div>
                                 """, unsafe_allow_html=True)
                             
@@ -587,7 +652,9 @@ class EnhancedRealtimeDashboard:
                                         'ticker': ticker,
                                         'name': name,
                                         'regime': 'NOT_ANALYZED',
-                                        'confidence': 0.0
+                                        'confidence': 0.0,
+                                        'is_out_of_sample': False,
+                                        'analysis_date': 'N/A'
                                     })
                             
                             # BULL ETFs
@@ -595,9 +662,11 @@ class EnhancedRealtimeDashboard:
                                 st.markdown("🟢 **BULL Regime:**")
                                 for etf in bull_etfs:
                                     confidence_text = f" (Confidence: {etf['confidence']:.1%})" if etf['confidence'] > 0 else ""
+                                    oos_indicator = " 🔮" if etf.get('is_out_of_sample', False) else " 📚"
+                                    analysis_date = etf.get('analysis_date', 'N/A')
                                     st.markdown(f"""
                                     <div class="etf-item etf-bull">
-                                        <span><strong>{etf['ticker']}</strong> - {etf['name']}</span>
+                                        <span><strong>{etf['ticker']}</strong> - {etf['name']}{oos_indicator}</span>
                                         <span>{etf['regime']}{confidence_text}</span>
                                     </div>
                                     """, unsafe_allow_html=True)
@@ -607,9 +676,11 @@ class EnhancedRealtimeDashboard:
                                 st.markdown("🔴 **BEAR Regime:**")
                                 for etf in bear_etfs:
                                     confidence_text = f" (Confidence: {etf['confidence']:.1%})" if etf['confidence'] > 0 else ""
+                                    oos_indicator = " 🔮" if etf.get('is_out_of_sample', False) else " 📚"
+                                    analysis_date = etf.get('analysis_date', 'N/A')
                                     st.markdown(f"""
                                     <div class="etf-item etf-bear">
-                                        <span><strong>{etf['ticker']}</strong> - {etf['name']}</span>
+                                        <span><strong>{etf['ticker']}</strong> - {etf['name']}{oos_indicator}</span>
                                         <span>{etf['regime']}{confidence_text}</span>
                                     </div>
                                     """, unsafe_allow_html=True)
@@ -618,9 +689,10 @@ class EnhancedRealtimeDashboard:
                             if unknown_etfs:
                                 st.markdown("⚠️ **Unknown/Error:**")
                                 for etf in unknown_etfs:
+                                    oos_indicator = " 🔮" if etf.get('is_out_of_sample', False) else ""
                                     st.markdown(f"""
                                     <div class="etf-item etf-unknown">
-                                        <span><strong>{etf['ticker']}</strong> - {etf['name']}</span>
+                                        <span><strong>{etf['ticker']}</strong> - {etf['name']}{oos_indicator}</span>
                                         <span>{etf['regime']}</span>
                                     </div>
                                     """, unsafe_allow_html=True)
@@ -628,14 +700,29 @@ class EnhancedRealtimeDashboard:
                     # 종합 차트
                     st.subheader("📈 Regime Distribution")
                     
-                    # 파이 차트
-                    fig_pie = go.Figure(data=[go.Pie(
-                        labels=['BULL', 'BEAR', 'Unknown'],
-                        values=[bull_count, bear_count, unknown_count],
-                        marker_colors=['#28a745', '#dc3545', '#ffc107']
-                    )])
-                    fig_pie.update_layout(title="Overall Market Regime Distribution")
-                    st.plotly_chart(fig_pie, use_container_width=True)
+                    # Out-of-Sample vs In-Sample 분석
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # 파이 차트
+                        fig_pie = go.Figure(data=[go.Pie(
+                            labels=['BULL', 'BEAR', 'Unknown'],
+                            values=[bull_count, bear_count, unknown_count],
+                            marker_colors=['#28a745', '#dc3545', '#ffc107']
+                        )])
+                        fig_pie.update_layout(title="Overall Market Regime Distribution")
+                        st.plotly_chart(fig_pie, use_container_width=True)
+                    
+                    with col2:
+                        # Out-of-Sample vs In-Sample 분포
+                        in_sample_count = len(results) - oos_count
+                        fig_oos = go.Figure(data=[go.Pie(
+                            labels=['Out-of-Sample (2025)', 'In-Sample (≤2024)'],
+                            values=[oos_count, in_sample_count],
+                            marker_colors=['#17a2b8', '#6c757d']
+                        )])
+                        fig_oos.update_layout(title="Sample Distribution")
+                        st.plotly_chart(fig_oos, use_container_width=True)
                     
                     # 전략별 요약 차트
                     strategy_data = []
@@ -643,6 +730,7 @@ class EnhancedRealtimeDashboard:
                         strategy_bull = 0
                         strategy_bear = 0
                         strategy_unknown = 0
+                        strategy_oos = 0
                         
                         for ticker in preset['components'].keys():
                             if ticker in results:
@@ -653,6 +741,9 @@ class EnhancedRealtimeDashboard:
                                     strategy_bear += 1
                                 else:
                                     strategy_unknown += 1
+                                
+                                if results[ticker].get('is_out_of_sample', False):
+                                    strategy_oos += 1
                             else:
                                 strategy_unknown += 1
                         
@@ -660,7 +751,8 @@ class EnhancedRealtimeDashboard:
                             'Strategy': strategy_name,
                             'BULL': strategy_bull,
                             'BEAR': strategy_bear,
-                            'Unknown': strategy_unknown
+                            'Unknown': strategy_unknown,
+                            'Out-of-Sample': strategy_oos
                         })
                     
                     strategy_df = pd.DataFrame(strategy_data)
@@ -679,7 +771,18 @@ class EnhancedRealtimeDashboard:
                     fig_strategy.update_xaxes(tickangle=45)
                     st.plotly_chart(fig_strategy, use_container_width=True)
                     
-                    st.success(f"✅ Analysis completed! {len(results)} assets analyzed.")
+                    # 범례 설명
+                    st.markdown("---")
+                    st.markdown("**Legend:**")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("🔮 **Out-of-Sample**: Model trained on 2005-2024, predicting 2025")
+                        st.markdown("🟢 **BULL**: Favorable market conditions")
+                    with col2:
+                        st.markdown("📚 **In-Sample**: Analysis using training period data")
+                        st.markdown("🔴 **BEAR**: Unfavorable market conditions")
+                    
+                    st.success(f"✅ Analysis completed! {len(results)} assets analyzed. {oos_count} out-of-sample predictions.")
                 else:
                     st.error("❌ Failed to analyze market regimes")
         else:
@@ -706,11 +809,15 @@ class EnhancedRealtimeDashboard:
             st.error(f"Update failed: {str(e)}")
     
     def run_backtest(self, rs_length, timeframe, cross_days, use_jump, years):
-        """백테스트 실행"""
+        """백테스트 실행 - 2024년까지 학습"""
         preset = st.session_state.selected_preset
         
         with st.spinner('Running backtest... This may take a few minutes'):
             try:
+                # Jump Model을 사용하는 경우 2024년까지만 학습하도록 설정
+                if use_jump:
+                    st.info("🎯 Jump Model will be trained on data up to 2024-12-31")
+                
                 strategy = UniversalRSWithJumpModel(
                     preset_config=preset,
                     rs_length=rs_length,
@@ -718,6 +825,10 @@ class EnhancedRealtimeDashboard:
                     rs_recent_cross_days=cross_days,
                     use_jump_model=use_jump
                 )
+                
+                # Jump Model에 training cutoff 설정
+                if use_jump and hasattr(strategy, 'jump_model') and strategy.jump_model:
+                    strategy.jump_model.training_cutoff_date = datetime(2024, 12, 31)
                 
                 end_date = datetime.now()
                 start_date = end_date - timedelta(days=365*years)
@@ -729,9 +840,15 @@ class EnhancedRealtimeDashboard:
                         'portfolio': portfolio_df,
                         'trades': trades_df if safe_data_check(trades_df) else pd.DataFrame(),
                         'regime': regime_df if safe_data_check(regime_df) else pd.DataFrame(),
-                        'metrics': strategy.calculate_performance_metrics(portfolio_df)
+                        'metrics': strategy.calculate_performance_metrics(portfolio_df),
+                        'use_jump_model': use_jump,
+                        'training_cutoff': '2024-12-31' if use_jump else 'N/A'
                     }
-                    st.success("✅ Backtest completed!")
+                    
+                    success_msg = "✅ Backtest completed!"
+                    if use_jump:
+                        success_msg += " (Jump Model trained on 2005-2024 data)"
+                    st.success(success_msg)
                 else:
                     st.error("❌ Backtest failed - no results generated")
                     
@@ -749,6 +866,14 @@ class EnhancedRealtimeDashboard:
         
         data = st.session_state.portfolio_data
         metrics = data.get('metrics', {})
+        use_jump = data.get('use_jump_model', False)
+        training_cutoff = data.get('training_cutoff', 'N/A')
+        
+        # 백테스트 설정 정보
+        if use_jump:
+            st.markdown(f"**🎯 Jump Model**: Enabled (Training cutoff: {training_cutoff})")
+        else:
+            st.markdown("**📊 Jump Model**: Disabled (Standard RS strategy)")
         
         # 핵심 지표
         col1, col2, col3, col4 = st.columns(4)
@@ -761,11 +886,26 @@ class EnhancedRealtimeDashboard:
         with col4:
             st.metric("Max Drawdown", metrics.get('최대 낙폭', 'N/A'))
         
+        # Jump Model 관련 추가 지표
+        if use_jump and 'BULL 기간' in metrics:
+            st.subheader("🔄 Regime Analysis")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("BULL Period", metrics.get('BULL 기간', 'N/A'))
+            with col2:
+                st.metric("BULL Return", metrics.get('BULL 수익률', 'N/A'))
+            with col3:
+                st.metric("BEAR Period", metrics.get('BEAR 기간', 'N/A'))
+            with col4:
+                st.metric("BEAR Return", metrics.get('BEAR 수익률', 'N/A'))
+        
         # 포트폴리오 가치 차트
         portfolio_df = data.get('portfolio')
         
         if safe_data_check(portfolio_df):
             fig = go.Figure()
+            
+            # 포트폴리오 가치 라인
             fig.add_trace(go.Scatter(
                 x=portfolio_df.index,
                 y=portfolio_df['value'],
@@ -774,8 +914,27 @@ class EnhancedRealtimeDashboard:
                 line=dict(color='blue', width=2)
             ))
             
+            # Jump Model 사용시 체제별 배경색 추가
+            if use_jump and 'regime' in portfolio_df.columns:
+                bull_periods = portfolio_df[portfolio_df['regime'] == 'BULL']
+                bear_periods = portfolio_df[portfolio_df['regime'] == 'BEAR']
+                
+                if not bull_periods.empty:
+                    for i in range(len(bull_periods)):
+                        fig.add_vrect(
+                            x0=bull_periods.index[i], x1=bull_periods.index[i],
+                            fillcolor="green", opacity=0.1, line_width=0
+                        )
+                
+                if not bear_periods.empty:
+                    for i in range(len(bear_periods)):
+                        fig.add_vrect(
+                            x0=bear_periods.index[i], x1=bear_periods.index[i],
+                            fillcolor="red", opacity=0.1, line_width=0
+                        )
+            
             fig.update_layout(
-                title="Portfolio Value Over Time",
+                title="Portfolio Value Over Time" + (" (with Regime Background)" if use_jump else ""),
                 xaxis_title="Date",
                 yaxis_title="Value",
                 height=400
@@ -785,9 +944,13 @@ class EnhancedRealtimeDashboard:
             
             # 상세 메트릭스 테이블
             if metrics:
-                st.subheader("Detailed Metrics")
+                st.subheader("📋 Detailed Metrics")
                 metrics_df = pd.DataFrame(list(metrics.items()), columns=['Metric', 'Value'])
                 st.dataframe(metrics_df, use_container_width=True)
+                
+                # Training cutoff 정보 추가
+                if use_jump:
+                    st.caption(f"💡 Jump Model was trained on data up to {training_cutoff}, providing out-of-sample predictions for 2025")
         else:
             st.warning("Portfolio data not available for charting")
     
