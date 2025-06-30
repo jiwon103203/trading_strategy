@@ -3,7 +3,7 @@ import os
 
 class PresetManager:
     """
-    다양한 시장 프리셋 관리
+    다양한 시장 프리셋 관리 (KOSPI 전체 시장 커버리지 추가)
     """
     
     @staticmethod
@@ -29,10 +29,10 @@ class PresetManager:
     
     @staticmethod
     def get_kospi_sectors():
-        """코스피 섹터 ETF (기존 전략)"""
+        """코스피 200 섹터 ETF (대형주 중심)"""
         return {
             'benchmark': '069500.KS',  # KODEX 200
-            'name': 'KOSPI Sector RS Strategy',
+            'name': 'KOSPI 200 Sector RS Strategy (Large Cap)',
             'components': {
                 '139220.KS': 'TIGER 200 IT',
                 '139230.KS': 'TIGER 200 산업재',
@@ -44,6 +44,88 @@ class PresetManager:
                 '139290.KS': 'TIGER 200 철강소재',
                 '227540.KS': 'TIGER 200 건강관리',
                 '227550.KS': 'TIGER 200 커뮤니케이션서비스'
+            }
+        }
+    
+    @staticmethod
+    def get_kospi_full_sectors():
+        """코스피 전체 시장 섹터 ETF (전체 시장 커버)"""
+        return {
+            'benchmark': '^KS11',  # KOSPI Composite Index
+            'name': 'KOSPI Full Market Sector RS Strategy',
+            'components': {
+                '091230.KS': 'TIGER IT',
+                '091170.KS': 'TIGER 금융',
+                '102970.KS': 'TIGER 건설',
+                '102780.KS': 'TIGER 철강소재',
+                '102960.KS': 'TIGER 에너지화학',
+                '102980.KS': 'TIGER 조선',
+                '139230.KS': 'TIGER 200 산업재',  # 대체용
+                '139240.KS': 'TIGER 200 소비재',  # 대체용
+                '227540.KS': 'TIGER 200 건강관리',  # 대체용
+                '148020.KS': 'TIGER 코스피고배당',
+                '114800.KS': 'KODEX 인버스',
+                '252670.KS': 'KODEX 200선물인버스2X',
+                '233740.KS': 'KODEX 코스닥150선물인버스',
+                '251340.KS': 'KODEX 코스닥150',
+                '152100.KS': 'ARIRANG 코스피',
+                '069660.KS': 'KOSEF 200',
+                '278530.KS': 'KODEX 200TR',
+                '130680.KS': 'TIGER 바이오헬스케어'
+            }
+        }
+    
+    @staticmethod
+    def get_kosdaq_sectors():
+        """코스닥 섹터 ETF (중소형주/성장주 중심)"""
+        return {
+            'benchmark': '229200.KS',  # KODEX 코스닥150
+            'name': 'KOSDAQ Sector RS Strategy',
+            'components': {
+                '251340.KS': 'KODEX 코스닥150',
+                '233740.KS': 'KODEX 코스닥150선물인버스',
+                '130680.KS': 'TIGER 바이오헬스케어',
+                '091160.KS': 'KODEX 하이일드',
+                '182490.KS': 'TIGER 코스닥150',
+                '261220.KS': 'KODEX WTI원유선물',
+                '238720.KS': 'KODEX 코스닥150 레버리지',
+                '130730.KS': 'KOSEF 단기자금',
+                '148070.KS': 'KOSEF 국고채10년',
+                '285130.KS': 'KODEX 코스닥150 선물',
+                '252710.KS': 'TIGER 코스닥150 레버리지',
+                '143850.KS': 'TIGER 코스닥150 ETN'
+            }
+        }
+    
+    @staticmethod
+    def get_korea_comprehensive():
+        """한국 종합 시장 전략 (대형주 + 중소형주 혼합)"""
+        return {
+            'benchmark': '1001.KS',  # KOSPI
+            'name': 'Korea Comprehensive Market RS Strategy',
+            'components': {
+                # 대형주 대표
+                '069500.KS': 'KODEX 200',
+                '278530.KS': 'KODEX 200TR',
+                '152100.KS': 'ARIRANG 코스피',
+                
+                # 중소형주 대표
+                '251340.KS': 'KODEX 코스닥150',
+                '182490.KS': 'TIGER 코스닥150',
+                
+                # 섹터별
+                '139220.KS': 'TIGER 200 IT',
+                '091230.KS': 'TIGER IT',
+                '139250.KS': 'TIGER 200 금융',
+                '091170.KS': 'TIGER 금융',
+                '130680.KS': 'TIGER 바이오헬스케어',
+                '102970.KS': 'TIGER 건설',
+                '102780.KS': 'TIGER 철강소재',
+                '102960.KS': 'TIGER 에너지화학',
+                
+                # 스타일
+                '148020.KS': 'TIGER 코스피고배당',
+                '114800.KS': 'KODEX 인버스'
             }
         }
     
@@ -260,7 +342,10 @@ class PresetManager:
         """사용 가능한 모든 프리셋 목록"""
         presets = [
             "S&P 500 Sectors",
-            "KOSPI Sectors",
+            "KOSPI 200 Sectors (Large Cap)",
+            "KOSPI Full Market Sectors",
+            "KOSDAQ Sectors",
+            "Korea Comprehensive Market",
             "MSCI Countries",
             "Europe Sectors",
             "Global Sectors",
@@ -337,6 +422,24 @@ def create_custom_preset_example():
 if __name__ == "__main__":
     # 프리셋 목록 표시
     PresetManager.list_presets()
+    
+    # 새로운 한국 시장 프리셋 테스트
+    print("\n=== 새로운 한국 시장 프리셋 ===")
+    
+    kospi_full = PresetManager.get_kospi_full_sectors()
+    print(f"\n{kospi_full['name']}")
+    print(f"벤치마크: {kospi_full['benchmark']}")
+    print(f"구성요소 수: {len(kospi_full['components'])}")
+    
+    kosdaq = PresetManager.get_kosdaq_sectors()
+    print(f"\n{kosdaq['name']}")
+    print(f"벤치마크: {kosdaq['benchmark']}")
+    print(f"구성요소 수: {len(kosdaq['components'])}")
+    
+    korea_comp = PresetManager.get_korea_comprehensive()
+    print(f"\n{korea_comp['name']}")
+    print(f"벤치마크: {korea_comp['benchmark']}")
+    print(f"구성요소 수: {len(korea_comp['components'])}")
     
     # 사용자 정의 프리셋 생성 예시
     create_custom_preset_example()
