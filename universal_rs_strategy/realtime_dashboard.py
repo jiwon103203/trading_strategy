@@ -142,10 +142,13 @@ class EnhancedRealtimeDashboard:
         if 'cache_timestamp' not in st.session_state:
             st.session_state.cache_timestamp = None
         
-        # 전체 프리셋 목록 (제한 없음)
+        # 전체 프리셋 목록 (한국 시장 확장 버전)
         self.presets = {
             'S&P 500 Sectors': PresetManager.get_sp500_sectors(),
-            'KOSPI Sectors': PresetManager.get_kospi_sectors(),
+            'KOSPI 200 Sectors (Large Cap)': PresetManager.get_kospi_sectors(),
+            'KOSPI Full Market Sectors': PresetManager.get_kospi_full_sectors(),
+            'KOSDAQ Sectors': PresetManager.get_kosdaq_sectors(),
+            'Korea Comprehensive Market': PresetManager.get_korea_comprehensive(),
             'MSCI Countries': PresetManager.get_msci_countries(),
             'Europe Sectors': PresetManager.get_europe_sectors(),
             'Global Sectors': PresetManager.get_global_sectors(),
