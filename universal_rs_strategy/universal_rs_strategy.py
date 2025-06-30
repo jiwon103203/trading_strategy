@@ -61,13 +61,15 @@ class UniversalRSStrategy:
         )
     
     def calculate_rs_components(self, price_data, benchmark_data):
-        """RS-Ratio와 RS-Momentum 계산"""
+        """RS-Ratio와 RS-Momentum 계산 - 수정된 버전"""
         try:
+            # 입력 데이터 정리
             if isinstance(price_data, pd.DataFrame):
                 price_data = price_data.squeeze()
             if isinstance(benchmark_data, pd.DataFrame):
                 benchmark_data = benchmark_data.squeeze()
             
+            # 데이터 정렬
             aligned_data = pd.DataFrame({
                 'price': price_data,
                 'benchmark': benchmark_data
@@ -90,10 +92,14 @@ class UniversalRSStrategy:
             wma_rs_ratio = self.calculate_wma(rs_ratio, self.length)
             rs_momentum = (rs_ratio / wma_rs_ratio * 100).fillna(100)
             
+            # NaN 값 처리
+            rs_ratio = rs_ratio.fillna(100)
+            rs_momentum = rs_momentum.fillna(100)
+            
             result_df = pd.DataFrame({
-                'rs_ratio': rs_ratio.values if hasattr(rs_ratio, 'values') else rs_ratio,
-                'rs_momentum': rs_momentum.values if hasattr(rs_momentum, 'values') else rs_momentum
-            }, index=rs_ratio.index if hasattr(rs_ratio, 'index') else aligned_data.index)
+                'rs_ratio': rs_ratio,
+                'rs_momentum': rs_momentum
+            }, index=rs_ratio.index)
             
             return result_df
             
@@ -102,7 +108,7 @@ class UniversalRSStrategy:
             return pd.DataFrame(columns=['rs_ratio', 'rs_momentum'])
     
     def check_recent_cross(self, rs_components, analysis_date, days_back):
-        """최근 N일 내에 100을 크로스했는지 확인"""
+        """최근 N일 내에 100을 크로스했는지 확인 - 수정된 버전"""
         if rs_components.empty or days_back is None:
             return True
         
@@ -122,13 +128,25 @@ class UniversalRSStrategy:
             rs_ratio_cross = False
             rs_momentum_cross = False
             
+            # RS Ratio 크로스 체크 - 수정된 부분
             for i in range(len(recent_data) - 1):
-                if recent_data['rs_ratio'].iloc[i] <= 100 < recent_data['rs_ratio'].iloc[i + 1]:
+                ratio_prev = recent_data['rs_ratio'].iloc[i]
+                ratio_curr = recent_data['rs_ratio'].iloc[i + 1]
+                
+                # pandas Series가 아닌 스칼라 값으로 비교
+                if (not pd.isna(ratio_prev) and not pd.isna(ratio_curr) and 
+                    float(ratio_prev) <= 100 < float(ratio_curr)):
                     rs_ratio_cross = True
                     break
             
+            # RS Momentum 크로스 체크 - 수정된 부분
             for i in range(len(recent_data) - 1):
-                if recent_data['rs_momentum'].iloc[i] <= 100 < recent_data['rs_momentum'].iloc[i + 1]:
+                momentum_prev = recent_data['rs_momentum'].iloc[i]
+                momentum_curr = recent_data['rs_momentum'].iloc[i + 1]
+                
+                # pandas Series가 아닌 스칼라 값으로 비교
+                if (not pd.isna(momentum_prev) and not pd.isna(momentum_curr) and 
+                    float(momentum_prev) <= 100 < float(momentum_curr)):
                     rs_momentum_cross = True
                     break
             
@@ -215,7 +233,7 @@ class UniversalRSStrategy:
         return price_data, benchmark_data
     
     def select_components(self, price_data, benchmark_data, date):
-        """특정 날짜에 RS-Ratio와 RS-Momentum이 모두 100 이상인 구성요소 선택"""
+        """특정 날짜에 RS-Ratio와 RS-Momentum이 모두 100 이상인 구성요소 선택 - 수정된 버전"""
         selected_components = []
         
         if self.timeframe == 'weekly':
@@ -243,15 +261,20 @@ class UniversalRSStrategy:
                     latest_rs_ratio = rs_components['rs_ratio'].iloc[-1]
                     latest_rs_momentum = rs_components['rs_momentum'].iloc[-1]
                     
-                    if pd.isna(latest_rs_ratio) or pd.isna(latest_rs_momentum):
+                    # NaN 체크 및 조건 확인 - 수정된 부분
+                    if (pd.isna(latest_rs_ratio) or pd.isna(latest_rs_momentum)):
                         continue
                     
-                    if latest_rs_ratio >= 100 and latest_rs_momentum >= 100:
+                    # 명시적으로 float로 변환하여 비교
+                    rs_ratio_val = float(latest_rs_ratio)
+                    rs_momentum_val = float(latest_rs_momentum)
+                    
+                    if rs_ratio_val >= 100 and rs_momentum_val >= 100:
                         selected_components.append({
                             'ticker': ticker,
                             'name': self.components[ticker],
-                            'rs_ratio': float(latest_rs_ratio),
-                            'rs_momentum': float(latest_rs_momentum)
+                            'rs_ratio': rs_ratio_val,
+                            'rs_momentum': rs_momentum_val
                         })
                         
             except Exception as e:
