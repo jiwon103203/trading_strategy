@@ -10,12 +10,14 @@ warnings.filterwarnings('ignore')
 
 class UniversalJumpModel:
     """
-    범용 Jump Model
+    범용 Jump Model with Training Cutoff Support
     다양한 지수에 적용 가능한 시장 체제(Bull/Bear) 감지
+    2024년까지 학습, 2025년은 추론용
     """
     
     def __init__(self, benchmark_ticker, benchmark_name="Market", 
-                 n_states=2, lookback_window=20, jump_penalty=50.0):
+                 n_states=2, lookback_window=20, jump_penalty=50.0,
+                 training_cutoff_date=None):
         """
         Parameters:
         - benchmark_ticker: 벤치마크 지수 티커 (예: '^GSPC', '069500.KS', 'URTH')
@@ -23,18 +25,28 @@ class UniversalJumpModel:
         - n_states: 상태 수 (기본값: 2 - Bull/Bear)
         - lookback_window: 특징 계산을 위한 lookback 기간
         - jump_penalty: 체제 전환에 대한 페널티
+        - training_cutoff_date: 학습 데이터 마지막 날짜 (None이면 전체 사용)
         """
         self.benchmark_ticker = benchmark_ticker
         self.benchmark_name = benchmark_name
         self.n_states = n_states
         self.lookback_window = lookback_window
         self.jump_penalty = jump_penalty
+        self.training_cutoff_date = training_cutoff_date
+        
+        # 기본 학습 마감일을 2024년 12월 31일로 설정
+        if training_cutoff_date is None:
+            self.training_cutoff_date = datetime(2024, 12, 31)
         
         # 모델 파라미터
         self.cluster_centers = None
         self.scaler = StandardScaler()
         self.current_regime = None
+        self.state_mapping = None
+        self.is_trained = False
         
+        print(f"Jump Model 초기화: 학습 마감일 = {self.training_cutoff_date.strftime('%Y-%m-%d')}")
+    
     def download_benchmark_data(self, start_date, end_date):
         """벤치마크 데이터 다운로드"""
         try:
@@ -137,6 +149,7 @@ class UniversalJumpModel:
         # 상태별 특성 분석
         self.analyze_regimes(features_df, optimized_states)
         
+        self.is_trained = True
         return optimized_states
     
     def optimize_with_jump_penalty(self, X, initial_states):
@@ -235,7 +248,7 @@ class UniversalJumpModel:
                 self.state_mapping[state] = 'BULL'
         
         # 통계 출력
-        print(f"\n=== {self.benchmark_name} 체제별 특성 ===")
+        print(f"\n=== {self.benchmark_name} 체제별 특성 (학습기간: ~{self.training_cutoff_date.strftime('%Y-%m-%d')}) ===")
         for state, stats in regime_stats.items():
             regime_type = self.state_mapping[state]
             if stats['count'] > 0:
@@ -251,7 +264,7 @@ class UniversalJumpModel:
     
     def predict_regime(self, current_features):
         """현재 시장 체제 예측"""
-        if self.cluster_centers is None:
+        if not self.is_trained or self.cluster_centers is None:
             raise ValueError("모델이 학습되지 않았습니다.")
         
         # 특징 정규화
@@ -279,6 +292,99 @@ class UniversalJumpModel:
             confidence = 1.0
         
         return self.state_mapping[predicted_state], confidence
+    
+    def train_model_with_cutoff(self, start_date=None, end_date=None):
+        """
+        특정 기간의 데이터로만 모델 학습
+        end_date가 None이면 training_cutoff_date 사용
+        """
+        if end_date is None:
+            end_date = self.training_cutoff_date
+        
+        if start_date is None:
+            # 20년 전부터 학습
+            start_date = end_date - timedelta(days=365*20)
+        
+        print(f"\n모델 학습 시작: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
+        
+        # 학습용 데이터 다운로드
+        price_data = self.download_benchmark_data(
+            start_date - timedelta(days=self.lookback_window * 2),
+            end_date
+        )
+        
+        if price_data is None or price_data.empty:
+            print(f"{self.benchmark_name} 학습 데이터를 가져올 수 없습니다.")
+            return False
+        
+        # 특징 계산
+        features_df = self.calculate_features(price_data)
+        
+        if features_df.empty:
+            print(f"{self.benchmark_name} 특징 계산 실패")
+            return False
+        
+        # 학습 기간으로 제한
+        training_features = features_df[start_date:end_date]
+        
+        if len(training_features) < self.lookback_window * 2:
+            print(f"학습 데이터 부족: {len(training_features)} < {self.lookback_window * 2}")
+            return False
+        
+        print(f"학습 특징 수: {len(training_features)}")
+        
+        # 모델 학습
+        self.fit_jump_model(training_features)
+        
+        return True
+    
+    def get_current_regime_with_training_cutoff(self):
+        """
+        학습 마감일까지만 학습하고 현재 체제 예측
+        2024년까지 학습, 2025년은 추론용
+        """
+        # 모델이 학습되지 않았으면 먼저 학습
+        if not self.is_trained:
+            success = self.train_model_with_cutoff()
+            if not success:
+                return None
+        
+        # 현재 시점까지의 데이터 가져오기 (추론용)
+        current_date = datetime.now()
+        inference_start = self.training_cutoff_date - timedelta(days=self.lookback_window * 2)
+        
+        print(f"\n추론 데이터: {inference_start.strftime('%Y-%m-%d')} ~ {current_date.strftime('%Y-%m-%d')}")
+        
+        # 추론용 데이터 다운로드
+        price_data = self.download_benchmark_data(inference_start, current_date)
+        
+        if price_data is None or price_data.empty:
+            print(f"{self.benchmark_name} 추론 데이터를 가져올 수 없습니다.")
+            return None
+        
+        # 특징 계산
+        features_df = self.calculate_features(price_data)
+        
+        if features_df.empty:
+            print(f"{self.benchmark_name} 추론 특징 계산 실패")
+            return None
+        
+        # 최신 특징으로 예측
+        latest_features = features_df.iloc[-1]
+        current_regime, confidence = self.predict_regime(latest_features)
+        
+        # 2025년 데이터 사용 여부 확인
+        latest_date = features_df.index[-1]
+        is_out_of_sample = latest_date > self.training_cutoff_date
+        
+        return {
+            'regime': current_regime,
+            'confidence': confidence,
+            'date': latest_date,
+            'features': latest_features.to_dict(),
+            'is_out_of_sample': is_out_of_sample,
+            'training_cutoff': self.training_cutoff_date.strftime('%Y-%m-%d')
+        }
     
     def get_regime_history(self, start_date, end_date):
         """과거 체제 이력 계산"""
@@ -311,38 +417,8 @@ class UniversalJumpModel:
         return regime_history[start_date:end_date]
     
     def get_current_regime(self):
-        """현재 시장 체제 확인"""
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=self.lookback_window * 4)
-        
-        # 데이터 다운로드
-        price_data = self.download_benchmark_data(start_date, end_date)
-        
-        if price_data is None or price_data.empty:
-            print(f"{self.benchmark_name} 데이터를 가져올 수 없습니다.")
-            return None
-        
-        # 특징 계산
-        features_df = self.calculate_features(price_data)
-        
-        if features_df.empty:
-            print(f"{self.benchmark_name} 특징 계산 실패")
-            return None
-        
-        # 모델이 학습되지 않은 경우 학습
-        if self.cluster_centers is None:
-            self.fit_jump_model(features_df)
-        
-        # 최신 특징으로 예측
-        latest_features = features_df.iloc[-1]
-        current_regime, confidence = self.predict_regime(latest_features)
-        
-        return {
-            'regime': current_regime,
-            'confidence': confidence,
-            'date': features_df.index[-1],
-            'features': latest_features.to_dict()
-        }
+        """현재 시장 체제 확인 (기존 호환성 유지)"""
+        return self.get_current_regime_with_training_cutoff()
     
     def get_regime_statistics(self, start_date, end_date):
         """체제별 상세 통계"""
@@ -380,36 +456,37 @@ class UniversalJumpModel:
         
         return stats
 
+
 # 사용 예시
 if __name__ == "__main__":
-    # S&P 500에 대한 Jump Model
+    # S&P 500에 대한 Jump Model (2024년까지 학습)
     sp500_jump = UniversalJumpModel(
         benchmark_ticker='^GSPC',
         benchmark_name='S&P 500',
-        jump_penalty=50.0
+        jump_penalty=50.0,
+        training_cutoff_date=datetime(2024, 12, 31)
     )
     
-    # 현재 체제 확인
-    current = sp500_jump.get_current_regime()
+    # 현재 체제 확인 (2024년까지 학습, 2025년은 추론)
+    current = sp500_jump.get_current_regime_with_training_cutoff()
     if current:
         print(f"\nS&P 500 현재 체제: {current['regime']} (신뢰도: {current['confidence']:.2%})")
+        print(f"분석 날짜: {current['date'].strftime('%Y-%m-%d')}")
+        print(f"Out-of-Sample 예측: {current['is_out_of_sample']}")
+        print(f"학습 마감일: {current['training_cutoff']}")
     
     # KOSPI에 대한 Jump Model
     kospi_jump = UniversalJumpModel(
         benchmark_ticker='069500.KS',
         benchmark_name='KOSPI 200',
-        jump_penalty=50.0
+        jump_penalty=50.0,
+        training_cutoff_date=datetime(2024, 12, 31)
     )
     
-    # 체제 통계
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=365*3)
-    
-    stats = kospi_jump.get_regime_statistics(start_date, end_date)
-    if stats:
-        print("\n=== KOSPI 200 체제 통계 (3년) ===")
-        for regime, data in stats.items():
-            print(f"\n{regime}:")
-            print(f"  - 총 기간: {data['total_days']}일 ({data['percentage']:.1f}%)")
-            print(f"  - 평균 지속: {data['avg_duration']:.0f}일")
-            print(f"  - 전환 횟수: {data['transitions']}회")
+    # 현재 체제 확인
+    current_kospi = kospi_jump.get_current_regime_with_training_cutoff()
+    if current_kospi:
+        print(f"\nKOSPI 200 현재 체제: {current_kospi['regime']} (신뢰도: {current_kospi['confidence']:.2%})")
+        print(f"분석 날짜: {current_kospi['date'].strftime('%Y-%m-%d')}")
+        print(f"Out-of-Sample 예측: {current_kospi['is_out_of_sample']}")
+        print(f"학습 마감일: {current_kospi['training_cutoff']}")
