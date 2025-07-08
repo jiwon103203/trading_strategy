@@ -141,6 +141,10 @@ class EnhancedRealtimeDashboard:
             st.session_state.regime_cache = {}
         if 'cache_timestamp' not in st.session_state:
             st.session_state.cache_timestamp = None
+        if 'selected_tickers_for_regime' not in st.session_state:
+            st.session_state.selected_tickers_for_regime = []
+        if 'regime_analysis_mode' not in st.session_state:
+            st.session_state.regime_analysis_mode = 'all'  # 'all' or 'selected'
         
         # 전체 프리셋 목록 (한국 시장 확장 버전)
         self.presets = {
@@ -224,6 +228,44 @@ class EnhancedRealtimeDashboard:
         
         # 추가 기능
         st.sidebar.subheader("Advanced Features")
+        
+        # Regime 분석 모드 선택
+        st.sidebar.markdown("#### 🌍 Regime Analysis Settings")
+        regime_mode = st.sidebar.radio(
+            "Analysis Mode",
+            ["All Markets", "Selected Tickers"],
+            index=0 if st.session_state.regime_analysis_mode == 'all' else 1
+        )
+        st.session_state.regime_analysis_mode = 'all' if regime_mode == "All Markets" else 'selected'
+        
+        # 선택적 분석 모드일 때 티커 선택
+        if st.session_state.regime_analysis_mode == 'selected':
+            # 모든 사용 가능한 티커 수집
+            all_tickers = {}
+            for strategy_name, preset in self.presets.items():
+                # 벤치마크 추가
+                benchmark = preset['benchmark']
+                all_tickers[benchmark] = f"{strategy_name} Benchmark"
+                
+                # 구성요소들 추가
+                for ticker, name in preset['components'].items():
+                    if ticker not in all_tickers:
+                        all_tickers[ticker] = name
+            
+            # 티커 선택 위젯
+            selected_tickers = st.sidebar.multiselect(
+                "Select Tickers to Analyze",
+                options=list(all_tickers.keys()),
+                default=st.session_state.selected_tickers_for_regime,
+                format_func=lambda x: f"{x} - {all_tickers[x]}"
+            )
+            st.session_state.selected_tickers_for_regime = selected_tickers
+            
+            if selected_tickers:
+                st.sidebar.info(f"Selected {len(selected_tickers)} ticker(s)")
+            else:
+                st.sidebar.warning("Please select at least one ticker")
+        
         if st.sidebar.button("🌍 Refresh All Regimes"):
             self.refresh_all_regimes()
         
@@ -490,30 +532,68 @@ class EnhancedRealtimeDashboard:
                 'error': str(e)
             }
     
-    def analyze_all_etf_regimes(self):
-        """모든 ETF의 시장 체제 병렬 분석"""
-        # 모든 전략의 모든 ETF 수집
-        all_etfs = {}
-        for strategy_name, preset in self.presets.items():
-            for ticker, name in preset['components'].items():
-                if ticker not in all_etfs:
+    def analyze_all_etf_regimes(self, selected_tickers_only=None):
+        """모든 ETF의 시장 체제 병렬 분석 (선택적 분석 지원)"""
+        # 분석할 ETF 결정
+        if selected_tickers_only:
+            # 선택된 티커들만 분석
+            all_etfs = {}
+            benchmarks = {}
+            
+            # 모든 프리셋에서 선택된 티커 정보 수집
+            for ticker in selected_tickers_only:
+                found = False
+                
+                # 벤치마크인지 확인
+                for strategy_name, preset in self.presets.items():
+                    if preset['benchmark'] == ticker:
+                        benchmarks[ticker] = f"{strategy_name} Benchmark"
+                        found = True
+                        break
+                
+                # 구성요소인지 확인
+                if not found:
+                    for strategy_name, preset in self.presets.items():
+                        if ticker in preset['components']:
+                            if ticker not in all_etfs:
+                                all_etfs[ticker] = {
+                                    'name': preset['components'][ticker],
+                                    'strategies': [strategy_name]
+                                }
+                            else:
+                                all_etfs[ticker]['strategies'].append(strategy_name)
+                            found = True
+                
+                # 찾지 못한 경우 기본값으로 추가
+                if not found:
                     all_etfs[ticker] = {
-                        'name': name,
-                        'strategies': [strategy_name]
+                        'name': ticker,
+                        'strategies': ['Custom']
                     }
-                else:
-                    all_etfs[ticker]['strategies'].append(strategy_name)
+        else:
+            # 모든 ETF 분석 (기존 로직)
+            all_etfs = {}
+            for strategy_name, preset in self.presets.items():
+                for ticker, name in preset['components'].items():
+                    if ticker not in all_etfs:
+                        all_etfs[ticker] = {
+                            'name': name,
+                            'strategies': [strategy_name]
+                        }
+                    else:
+                        all_etfs[ticker]['strategies'].append(strategy_name)
+            
+            # 벤치마크도 추가
+            benchmarks = {}
+            for strategy_name, preset in self.presets.items():
+                benchmark = preset['benchmark']
+                if benchmark not in benchmarks:
+                    benchmarks[benchmark] = f"{strategy_name} Benchmark"
         
-        # 벤치마크도 추가
-        benchmarks = {}
-        for strategy_name, preset in self.presets.items():
-            benchmark = preset['benchmark']
-            if benchmark not in benchmarks:
-                benchmarks[benchmark] = f"{strategy_name} Benchmark"
-        
-        # 캐시 확인
+        # 캐시 확인 (선택적 분석일 경우 캐시 사용 안 함)
         now = datetime.now()
-        if (st.session_state.cache_timestamp and 
+        if (not selected_tickers_only and
+            st.session_state.cache_timestamp and 
             now - st.session_state.cache_timestamp < self.cache_duration and
             st.session_state.regime_cache):
             return st.session_state.regime_cache
@@ -572,9 +652,10 @@ class EnhancedRealtimeDashboard:
                     processed += 1
                     progress_bar.progress(processed / total_items)
         
-        # 캐시 업데이트
-        st.session_state.regime_cache = results
-        st.session_state.cache_timestamp = now
+        # 캐시 업데이트 (전체 분석일 경우에만)
+        if not selected_tickers_only:
+            st.session_state.regime_cache = results
+            st.session_state.cache_timestamp = now
         
         progress_bar.empty()
         status_text.empty()
@@ -584,12 +665,35 @@ class EnhancedRealtimeDashboard:
     def display_all_market_regimes(self):
         """모든 시장 체제 현황 표시"""
         st.subheader("🌍 All Market Regimes Overview")
-        st.markdown("Current Bull/Bear status for all ETFs across all strategies")
+        
+        # 분석 모드 표시
+        if st.session_state.regime_analysis_mode == 'selected':
+            if st.session_state.selected_tickers_for_regime:
+                st.markdown(f"**Selected Tickers Analysis** ({len(st.session_state.selected_tickers_for_regime)} tickers)")
+                with st.expander("Selected Tickers", expanded=False):
+                    for ticker in st.session_state.selected_tickers_for_regime:
+                        st.write(f"• {ticker}")
+            else:
+                st.warning("No tickers selected. Please select tickers from the sidebar.")
+                return
+        else:
+            st.markdown("**Full Market Analysis** (All ETFs across all strategies)")
+        
+        st.markdown("Current Bull/Bear status for selected ETFs")
         st.markdown("**🎯 Model Training**: 2005-2024 (20 years) | **🔮 Inference**: 2025 (Out-of-Sample)**")
         
-        if st.button("🔄 Analyze All Market Regimes", type="primary"):
-            with st.spinner("Analyzing all market regimes... This may take a few minutes"):
-                results = self.analyze_all_etf_regimes()
+        button_text = "🔄 Analyze Selected Tickers" if st.session_state.regime_analysis_mode == 'selected' else "🔄 Analyze All Market Regimes"
+        
+        if st.button(button_text, type="primary"):
+            with st.spinner("Analyzing market regimes... This may take a few minutes"):
+                # 선택 모드에 따라 분석 실행
+                if st.session_state.regime_analysis_mode == 'selected':
+                    if not st.session_state.selected_tickers_for_regime:
+                        st.error("Please select at least one ticker from the sidebar")
+                        return
+                    results = self.analyze_all_etf_regimes(selected_tickers_only=st.session_state.selected_tickers_for_regime)
+                else:
+                    results = self.analyze_all_etf_regimes()
                 
                 if results:
                     # 통계 요약
@@ -613,12 +717,56 @@ class EnhancedRealtimeDashboard:
                     # 전략별 정리
                     st.subheader("📊 By Strategy")
                     
-                    for strategy_name, preset in self.presets.items():
-                        with st.expander(f"{strategy_name} ({len(preset['components'])} ETFs)"):
+                    # 선택 모드일 경우 관련 전략만 표시
+                    strategies_to_show = []
+                    if st.session_state.regime_analysis_mode == 'selected':
+                        # 선택된 티커가 포함된 전략만 찾기
+                        for strategy_name, preset in self.presets.items():
+                            has_selected_ticker = False
+                            
+                            # 벤치마크 확인
+                            if preset['benchmark'] in st.session_state.selected_tickers_for_regime:
+                                has_selected_ticker = True
+                            
+                            # 구성요소 확인
+                            if not has_selected_ticker:
+                                for ticker in st.session_state.selected_tickers_for_regime:
+                                    if ticker in preset['components']:
+                                        has_selected_ticker = True
+                                        break
+                            
+                            if has_selected_ticker:
+                                strategies_to_show.append((strategy_name, preset))
+                    else:
+                        strategies_to_show = list(self.presets.items())
+                    
+                    # 전략별 표시
+                    for strategy_name, preset in strategies_to_show:
+                        # 이 전략에 포함된 선택 티커 수 계산
+                        if st.session_state.regime_analysis_mode == 'selected':
+                            selected_in_strategy = []
+                            if preset['benchmark'] in st.session_state.selected_tickers_for_regime:
+                                selected_in_strategy.append(preset['benchmark'])
+                            for ticker in st.session_state.selected_tickers_for_regime:
+                                if ticker in preset['components']:
+                                    selected_in_strategy.append(ticker)
+                            
+                            if not selected_in_strategy:
+                                continue
+                            
+                            display_title = f"{strategy_name} ({len(selected_in_strategy)} selected tickers)"
+                        else:
+                            display_title = f"{strategy_name} ({len(preset['components'])} ETFs)"
+                        
+                        with st.expander(display_title):
                             
                             # 벤치마크 상태
                             benchmark_ticker = preset['benchmark']
-                            if benchmark_ticker in results:
+                            show_benchmark = True
+                            if st.session_state.regime_analysis_mode == 'selected':
+                                show_benchmark = benchmark_ticker in st.session_state.selected_tickers_for_regime
+                            
+                            if show_benchmark and benchmark_ticker in results:
                                 benchmark_result = results[benchmark_ticker]
                                 regime_class = f"{benchmark_result['regime'].lower()}-card" if benchmark_result['regime'] in ['BULL', 'BEAR'] else "unknown-card"
                                 
@@ -641,7 +789,13 @@ class EnhancedRealtimeDashboard:
                             bear_etfs = []
                             unknown_etfs = []
                             
-                            for ticker, name in preset['components'].items():
+                            # 표시할 구성요소 결정
+                            components_to_show = preset['components'].items()
+                            if st.session_state.regime_analysis_mode == 'selected':
+                                components_to_show = [(t, n) for t, n in preset['components'].items() 
+                                                    if t in st.session_state.selected_tickers_for_regime]
+                            
+                            for ticker, name in components_to_show:
                                 if ticker in results:
                                     result = results[ticker]
                                     if result['regime'] == 'BULL':
@@ -735,7 +889,17 @@ class EnhancedRealtimeDashboard:
                         strategy_unknown = 0
                         strategy_oos = 0
                         
-                        for ticker in preset['components'].keys():
+                        # 분석할 티커 결정
+                        tickers_to_analyze = list(preset['components'].keys())
+                        if st.session_state.regime_analysis_mode == 'selected':
+                            tickers_to_analyze = [t for t in tickers_to_analyze 
+                                                if t in st.session_state.selected_tickers_for_regime]
+                            
+                            # 이 전략에 선택된 티커가 없으면 건너뛰기
+                            if not tickers_to_analyze and preset['benchmark'] not in st.session_state.selected_tickers_for_regime:
+                                continue
+                        
+                        for ticker in tickers_to_analyze:
                             if ticker in results:
                                 regime = results[ticker]['regime']
                                 if regime == 'BULL':
@@ -750,29 +914,33 @@ class EnhancedRealtimeDashboard:
                             else:
                                 strategy_unknown += 1
                         
-                        strategy_data.append({
-                            'Strategy': strategy_name,
-                            'BULL': strategy_bull,
-                            'BEAR': strategy_bear,
-                            'Unknown': strategy_unknown,
-                            'Out-of-Sample': strategy_oos
-                        })
+                        # 전략에 데이터가 있는 경우만 추가
+                        if tickers_to_analyze or (st.session_state.regime_analysis_mode == 'selected' and 
+                                                preset['benchmark'] in st.session_state.selected_tickers_for_regime):
+                            strategy_data.append({
+                                'Strategy': strategy_name,
+                                'BULL': strategy_bull,
+                                'BEAR': strategy_bear,
+                                'Unknown': strategy_unknown,
+                                'Out-of-Sample': strategy_oos
+                            })
                     
                     strategy_df = pd.DataFrame(strategy_data)
                     
-                    fig_strategy = go.Figure()
-                    fig_strategy.add_trace(go.Bar(name='BULL', x=strategy_df['Strategy'], y=strategy_df['BULL'], marker_color='#28a745'))
-                    fig_strategy.add_trace(go.Bar(name='BEAR', x=strategy_df['Strategy'], y=strategy_df['BEAR'], marker_color='#dc3545'))
-                    fig_strategy.add_trace(go.Bar(name='Unknown', x=strategy_df['Strategy'], y=strategy_df['Unknown'], marker_color='#ffc107'))
-                    
-                    fig_strategy.update_layout(
-                        title='Regime Distribution by Strategy',
-                        barmode='stack',
-                        xaxis_title='Strategy',
-                        yaxis_title='Number of ETFs'
-                    )
-                    fig_strategy.update_xaxes(tickangle=45)
-                    st.plotly_chart(fig_strategy, use_container_width=True)
+                    if not strategy_df.empty:
+                        fig_strategy = go.Figure()
+                        fig_strategy.add_trace(go.Bar(name='BULL', x=strategy_df['Strategy'], y=strategy_df['BULL'], marker_color='#28a745'))
+                        fig_strategy.add_trace(go.Bar(name='BEAR', x=strategy_df['Strategy'], y=strategy_df['BEAR'], marker_color='#dc3545'))
+                        fig_strategy.add_trace(go.Bar(name='Unknown', x=strategy_df['Strategy'], y=strategy_df['Unknown'], marker_color='#ffc107'))
+                        
+                        fig_strategy.update_layout(
+                            title='Regime Distribution by Strategy',
+                            barmode='stack',
+                            xaxis_title='Strategy',
+                            yaxis_title='Number of ETFs'
+                        )
+                        fig_strategy.update_xaxes(tickangle=45)
+                        st.plotly_chart(fig_strategy, use_container_width=True)
                     
                     # 범례 설명
                     st.markdown("---")
@@ -785,20 +953,28 @@ class EnhancedRealtimeDashboard:
                         st.markdown("📚 **In-Sample**: Analysis using training period data")
                         st.markdown("🔴 **BEAR**: Unfavorable market conditions")
                     
-                    st.success(f"✅ Analysis completed! {len(results)} assets analyzed. {oos_count} out-of-sample predictions.")
+                    if st.session_state.regime_analysis_mode == 'selected':
+                        st.success(f"✅ Analysis completed! {len(results)} selected assets analyzed. {oos_count} out-of-sample predictions.")
+                    else:
+                        st.success(f"✅ Analysis completed! {len(results)} assets analyzed. {oos_count} out-of-sample predictions.")
                 else:
                     st.error("❌ Failed to analyze market regimes")
         else:
             # 캐시된 결과 표시
-            if st.session_state.regime_cache and st.session_state.cache_timestamp:
+            if st.session_state.regime_cache and st.session_state.cache_timestamp and st.session_state.regime_analysis_mode == 'all':
                 cache_age = datetime.now() - st.session_state.cache_timestamp
                 st.info(f"📋 Cached results available (Updated {cache_age.seconds//60} minutes ago). Click 'Analyze' to refresh.")
+            elif st.session_state.regime_analysis_mode == 'selected':
+                st.info("📋 Click 'Analyze Selected Tickers' to analyze your selected tickers.")
+            else:
+                st.info("📋 Click 'Analyze All Market Regimes' to start analysis.")
     
     def refresh_all_regimes(self):
         """모든 체제 정보 새로고침"""
         try:
             st.session_state.regime_cache = {}
             st.session_state.cache_timestamp = None
+            # 선택된 티커는 유지 (사용자가 원할 수 있으므로)
             st.success("✅ Regime cache cleared! Click 'All Market Regimes' tab and 'Analyze' to refresh.")
         except Exception as e:
             st.error(f"Cache refresh failed: {str(e)}")
@@ -984,6 +1160,8 @@ class EnhancedRealtimeDashboard:
             st.session_state.last_update = None
             st.session_state.regime_cache = {}
             st.session_state.cache_timestamp = None
+            st.session_state.selected_tickers_for_regime = []
+            st.session_state.regime_analysis_mode = 'all'
             st.success("✅ All cache cleared!")
         except Exception as e:
             st.error(f"Cache clear failed: {str(e)}")
