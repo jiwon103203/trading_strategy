@@ -6,18 +6,27 @@ from universal_jump_model import UniversalJumpModel
 import warnings
 warnings.filterwarnings('ignore')
 
+# Risk-free rate 유틸리티 import
+try:
+    from risk_free_rate_utils import RiskFreeRateManager, calculate_dynamic_sharpe_ratio, calculate_dynamic_sortino_ratio
+    HAS_RF_UTILS = True
+except ImportError:
+    print("Warning: risk_free_rate_utils.py가 없습니다. 기본 risk-free rate (2%) 사용")
+    HAS_RF_UTILS = False
+
 class UniversalRSWithJumpModel:
     """
-    범용 RS 전략 + Jump Model 통합 (Training Cutoff 지원)
+    범용 RS 전략 + Jump Model 통합 (Training Cutoff + 동적 Risk-Free Rate 지원)
     - 시장이 BEAR 체제일 때 모든 투자 중단
     - BULL 체제일 때만 RS 전략 실행
     - Jump Model은 2024년까지만 학습, 2025년은 추론용
+    - 동적 Risk-Free Rate (^IRX) 사용한 성과 지표 계산
     """
     
     def __init__(self, preset_config, rs_length=20, rs_timeframe='daily', 
                  rs_recent_cross_days=None, jump_penalty=50.0, 
                  regime_lookback=20, use_jump_model=True,
-                 training_cutoff_date=None):
+                 training_cutoff_date=None, rf_ticker='^IRX', default_rf_rate=0.02):
         """
         Parameters:
         - preset_config: 프리셋 설정 딕셔너리 (benchmark, components, name)
@@ -28,19 +37,33 @@ class UniversalRSWithJumpModel:
         - regime_lookback: 체제 판단을 위한 lookback 기간
         - use_jump_model: Jump Model 사용 여부
         - training_cutoff_date: Jump Model 학습 마감일 (None이면 2024-12-31)
+        - rf_ticker: Risk-free rate 티커 (기본: ^IRX)
+        - default_rf_rate: 기본 risk-free rate (기본: 2%)
         """
-        # RS 전략 초기화
+        # RS 전략 초기화 (동적 Risk-Free Rate 지원)
         self.rs_strategy = UniversalRSStrategy(
             benchmark=preset_config['benchmark'],
             components=preset_config['components'],
             name=preset_config['name'],
             length=rs_length,
             timeframe=rs_timeframe,
-            recent_cross_days=rs_recent_cross_days
+            recent_cross_days=rs_recent_cross_days,
+            rf_ticker=rf_ticker,
+            default_rf_rate=default_rf_rate
         )
         
         # Jump Model 사용 여부
         self.use_jump_model = use_jump_model
+        
+        # Risk-Free Rate 설정
+        self.rf_ticker = rf_ticker
+        self.default_rf_rate = default_rf_rate
+        
+        # Risk-free rate 관리자 초기화
+        if HAS_RF_UTILS:
+            self.rf_manager = RiskFreeRateManager(rf_ticker, default_rf_rate)
+        else:
+            self.rf_manager = None
         
         # Training cutoff 설정
         if training_cutoff_date is None:
@@ -64,6 +87,8 @@ class UniversalRSWithJumpModel:
         
         self.regime_history = None
         self.preset_config = preset_config
+        
+        print(f"통합 전략 초기화: Risk-Free Rate = {self.rf_ticker}")
         
     def prepare_regime_data(self, start_date, end_date):
         """백테스트를 위한 체제 데이터 준비"""
@@ -188,7 +213,7 @@ class UniversalRSWithJumpModel:
             return 'BULL'
     
     def backtest(self, start_date, end_date, initial_capital=10000000):
-        """Jump Model을 적용한 백테스트 (Training Cutoff 고려)"""
+        """Jump Model을 적용한 백테스트 (Training Cutoff + 동적 Risk-Free Rate 고려)"""
         
         # Jump Model 비활성화시 기본 RS 전략 실행
         if not self.use_jump_model:
@@ -207,6 +232,7 @@ class UniversalRSWithJumpModel:
         
         # 1. 체제 데이터 준비 (training cutoff 고려)
         print(f"Training cutoff: {self.training_cutoff_date.strftime('%Y-%m-%d')}")
+        print(f"Risk-Free Rate: {self.rf_ticker}")
         self.prepare_regime_data(start_date, end_date)
         
         # 2. RS 전략용 데이터 준비
@@ -453,12 +479,68 @@ class UniversalRSWithJumpModel:
         return portfolio_df, trades_df, regime_df
     
     def calculate_performance_metrics(self, portfolio_df):
-        """성과 지표 계산 (Out-of-sample 정보 포함)"""
+        """성과 지표 계산 (Out-of-sample 정보 + 동적 Risk-Free Rate 포함)"""
         if portfolio_df.empty:
             return {}
         
+        print(f"\n성과 지표 계산 중... (Risk-Free Rate: {self.rf_ticker})")
+        
+        # 기본 수익률 지표
+        total_return = (portfolio_df['value'].iloc[-1] / portfolio_df['value'].iloc[0] - 1) * 100
+        years = (portfolio_df.index[-1] - portfolio_df.index[0]).days / 365.25
+        annual_return = (np.power(1 + total_return/100, 1/years) - 1) * 100 if years > 0 else 0
+        
+        returns = portfolio_df['value'].pct_change().dropna()
+        annual_volatility = returns.std() * np.sqrt(252) * 100 if len(returns) > 0 else 0
+        
         # 기본 성과 지표
-        metrics = self.rs_strategy.calculate_performance_metrics(portfolio_df)
+        metrics = {
+            '총 수익률': f"{total_return:.2f}%",
+            '연율화 수익률': f"{annual_return:.2f}%",
+            '연율화 변동성': f"{annual_volatility:.2f}%"
+        }
+        
+        # 동적 Risk-Free Rate를 사용한 성과 지표
+        if HAS_RF_UTILS and self.rf_manager:
+            try:
+                # Risk-free rate 다운로드
+                start_date = portfolio_df.index[0]
+                end_date = portfolio_df.index[-1]
+                self.rf_manager.download_risk_free_rate(start_date, end_date)
+                
+                # 동적 Sharpe ratio
+                sharpe_ratio = self.rf_manager.calculate_sharpe_ratio(returns, portfolio_df.index)
+                
+                # 동적 Sortino ratio
+                sortino_ratio = self.rf_manager.calculate_sortino_ratio(returns, portfolio_df.index)
+                
+                # Risk-free rate 통계
+                rf_stats = self.rf_manager.get_risk_free_rate_stats(start_date, end_date)
+                
+                print(f"평균 Risk-Free Rate: {rf_stats['mean_rate']:.3f}%")
+                print(f"Sharpe Ratio (동적): {sharpe_ratio:.3f}")
+                print(f"Sortino Ratio (동적): {sortino_ratio:.3f}")
+                
+                # 메트릭스에 추가
+                metrics.update({
+                    '샤프 비율 (동적)': f"{sharpe_ratio:.3f}",
+                    '소르티노 비율 (동적)': f"{sortino_ratio:.3f}" if sortino_ratio != float('inf') else "∞",
+                    '평균 Risk-Free Rate': f"{rf_stats['mean_rate']:.3f}%",
+                    'Risk-Free Rate 티커': self.rf_ticker,
+                    'Risk-Free Rate 범위': f"{rf_stats['min_rate']:.3f}% ~ {rf_stats['max_rate']:.3f}%"
+                })
+                
+            except Exception as e:
+                print(f"동적 성과 지표 계산 실패: {e}")
+                # 기본 방식으로 fallback
+                sharpe_ratio = (annual_return - self.default_rf_rate * 100) / annual_volatility if annual_volatility > 0 else 0
+                metrics['샤프 비율 (기본)'] = f"{sharpe_ratio:.2f}"
+                metrics['Risk-Free Rate'] = f"{self.default_rf_rate*100:.1f}% (기본값)"
+        else:
+            # 기본 방식 (2% 고정)
+            sharpe_ratio = (annual_return - self.default_rf_rate * 100) / annual_volatility if annual_volatility > 0 else 0
+            metrics['샤프 비율 (기본)'] = f"{sharpe_ratio:.2f}"
+            metrics['Risk-Free Rate'] = f"{self.default_rf_rate*100:.1f}% (기본값)"
         
         # Training cutoff 정보 추가
         if self.use_jump_model:
@@ -477,6 +559,18 @@ class UniversalRSWithJumpModel:
                     if len(oos_df) > 1:
                         oos_return = (oos_df['value'].iloc[-1] / oos_df['value'].iloc[0] - 1) * 100
                         metrics['Out-of-Sample Return'] = f"{oos_return:.2f}%"
+                        
+                        # Out-of-sample 기간의 동적 성과 지표
+                        if HAS_RF_UTILS and self.rf_manager and len(oos_df) > 10:
+                            try:
+                                oos_returns = oos_df['value'].pct_change().dropna()
+                                oos_sharpe = self.rf_manager.calculate_sharpe_ratio(oos_returns, oos_df.index)
+                                oos_sortino = self.rf_manager.calculate_sortino_ratio(oos_returns, oos_df.index)
+                                
+                                metrics['Out-of-Sample Sharpe (동적)'] = f"{oos_sharpe:.3f}"
+                                metrics['Out-of-Sample Sortino (동적)'] = f"{oos_sortino:.3f}" if oos_sortino != float('inf') else "∞"
+                            except Exception as e:
+                                print(f"Out-of-sample 성과 지표 계산 실패: {e}")
                 
                 if not in_sample_df.empty:
                     in_sample_days = len(in_sample_df)
@@ -492,6 +586,15 @@ class UniversalRSWithJumpModel:
                 bull_return = (bull_df['value'].iloc[-1] / bull_df['value'].iloc[0] - 1) * 100 if len(bull_df) > 1 else 0
                 metrics['BULL 기간'] = f"{bull_days}일 ({bull_days/len(portfolio_df)*100:.1f}%)"
                 metrics['BULL 수익률'] = f"{bull_return:.2f}%"
+                
+                # BULL 기간의 동적 성과 지표
+                if HAS_RF_UTILS and self.rf_manager and len(bull_df) > 10:
+                    try:
+                        bull_returns = bull_df['value'].pct_change().dropna()
+                        bull_sharpe = self.rf_manager.calculate_sharpe_ratio(bull_returns, bull_df.index)
+                        metrics['BULL Sharpe (동적)'] = f"{bull_sharpe:.3f}"
+                    except:
+                        pass
             
             if not bear_df.empty:
                 bear_days = len(bear_df)
@@ -500,3 +603,99 @@ class UniversalRSWithJumpModel:
                 metrics['BEAR 수익률'] = f"{bear_return:.2f}%"
         
         return metrics
+
+
+# 편의 함수들
+def create_integrated_strategy_with_dynamic_rf(preset_config, use_jump_model=True, 
+                                             rf_ticker='^IRX', default_rf_rate=0.02, **kwargs):
+    """동적 Risk-Free Rate를 사용하는 통합 전략 생성 편의 함수"""
+    return UniversalRSWithJumpModel(
+        preset_config=preset_config,
+        use_jump_model=use_jump_model,
+        rf_ticker=rf_ticker,
+        default_rf_rate=default_rf_rate,
+        **kwargs
+    )
+
+def compare_dynamic_rf_strategies(preset1, preset2, years=3, rf_ticker='^IRX'):
+    """동적 Risk-Free Rate를 사용한 전략 비교"""
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365*years)
+    
+    results = {}
+    
+    for i, preset in enumerate([preset1, preset2], 1):
+        print(f"\n=== 전략 {i}: {preset['name']} ===")
+        
+        strategy = UniversalRSWithJumpModel(
+            preset_config=preset,
+            use_jump_model=True,
+            rf_ticker=rf_ticker
+        )
+        
+        portfolio_df, trades_df, regime_df = strategy.backtest(start_date, end_date)
+        
+        if portfolio_df is not None and not portfolio_df.empty:
+            metrics = strategy.calculate_performance_metrics(portfolio_df)
+            results[preset['name']] = metrics
+    
+    # 결과 비교 출력
+    if len(results) == 2:
+        print(f"\n=== 전략 비교 결과 (동적 Risk-Free Rate: {rf_ticker}) ===")
+        strategies = list(results.keys())
+        
+        print(f"{'지표':<30} {strategies[0]:<25} {strategies[1]:<25}")
+        print("-" * 80)
+        
+        compare_metrics = ['총 수익률', '연율화 수익률', '샤프 비율 (동적)', '소르티노 비율 (동적)', '평균 Risk-Free Rate']
+        
+        for metric in compare_metrics:
+            val1 = results[strategies[0]].get(metric, 'N/A')
+            val2 = results[strategies[1]].get(metric, 'N/A')
+            print(f"{metric:<30} {str(val1):<25} {str(val2):<25}")
+    
+    return results
+
+
+# 사용 예시
+if __name__ == "__main__":
+    from preset_manager import PresetManager
+    
+    # S&P 500 섹터 전략 (동적 Risk-Free Rate 사용)
+    sp500_preset = PresetManager.get_sp500_sectors()
+    
+    strategy = UniversalRSWithJumpModel(
+        preset_config=sp500_preset,
+        use_jump_model=True,
+        rf_ticker='^IRX',  # 미국 3개월물 금리
+        default_rf_rate=0.02,
+        training_cutoff_date=datetime(2024, 12, 31)
+    )
+    
+    # 백테스트
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365*3)  # 3년
+    
+    print(f"백테스트 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
+    print(f"Jump Model 학습 마감일: 2024-12-31")
+    print(f"Risk-Free Rate: ^IRX (미국 3개월물 국채)")
+    
+    portfolio_df, trades_df, regime_df = strategy.backtest(start_date, end_date)
+    
+    if portfolio_df is not None and not portfolio_df.empty:
+        metrics = strategy.calculate_performance_metrics(portfolio_df)
+        
+        print(f"\n=== {sp500_preset['name']} 성과 결과 ===")
+        for key, value in metrics.items():
+            print(f"{key}: {value}")
+        
+        # 추가 분석
+        if HAS_RF_UTILS:
+            print(f"\n=== 동적 Risk-Free Rate 추가 분석 ===")
+            quick_sharpe = calculate_dynamic_sharpe_ratio(portfolio_df, '^IRX')
+            quick_sortino = calculate_dynamic_sortino_ratio(portfolio_df, '^IRX')
+            
+            print(f"빠른 Sharpe 계산: {quick_sharpe:.3f}")
+            print(f"빠른 Sortino 계산: {quick_sortino:.3f}")
+    
+    print(f"\n동적 Risk-Free Rate 통합 시스템 테스트 완료!")
