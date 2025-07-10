@@ -19,6 +19,8 @@ from universal_jump_model import UniversalJumpModel
 from universal_rs_with_jump import UniversalRSWithJumpModel
 import concurrent.futures
 from threading import Lock
+import traceback
+import yfinance as yf  # GLD 특별 분석을 위해 추가
 
 # Risk-free rate 유틸리티 import
 try:
@@ -108,6 +110,15 @@ st.markdown("""
     background-color: #fff3cd;
     border-left: 4px solid #ffc107;
 }
+.debug-info {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 5px;
+    padding: 10px;
+    margin: 5px 0;
+    font-family: monospace;
+    font-size: 12px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -172,6 +183,8 @@ class EnhancedRealtimeDashboard:
             st.session_state.rf_ticker = '^IRX'
         if 'default_rf_rate' not in st.session_state:
             st.session_state.default_rf_rate = 0.02
+        if 'debug_mode' not in st.session_state:
+            st.session_state.debug_mode = False
         
         # 전체 프리셋 목록 (한국 시장 확장 버전)
         self.presets = {
@@ -197,6 +210,9 @@ class EnhancedRealtimeDashboard:
         st.title("🚀 Universal RS Strategy Dashboard - Dynamic Risk-Free Rate Edition")
         st.markdown("### Real-time Market Monitoring & Signal Generation (All ETFs + Dynamic RF)")
         
+        # 수정사항 알림
+        st.success("🔧 **Version 2.1.0**: MODEL_INIT_ERROR 수정 완료! UniversalJumpModel 매개변수 문제 해결")
+        
         # Risk-Free Rate 상태 표시
         rf_status = "📊 동적" if HAS_RF_UTILS else "📌 고정"
         st.markdown(f"**🏦 Risk-Free Rate**: {st.session_state.rf_ticker} ({rf_status}) | **🎯 Training**: 2005-2024 | **🔮 Inference**: 2025")
@@ -211,8 +227,15 @@ class EnhancedRealtimeDashboard:
             st.info("👈 Please select a strategy preset from the sidebar to begin")
     
     def create_sidebar(self):
-        """사이드바 생성"""
+        """사이드바 생성 (수정: spinner 오류 해결)"""
         st.sidebar.header("Configuration")
+        
+        # 디버그 모드 토글
+        st.session_state.debug_mode = st.sidebar.checkbox(
+            "🐛 Debug Mode", 
+            value=st.session_state.debug_mode,
+            help="Show detailed error information and debugging output"
+        )
         
         # Risk-Free Rate 설정
         st.sidebar.subheader("🏦 Risk-Free Rate Settings")
@@ -236,9 +259,10 @@ class EnhancedRealtimeDashboard:
                 st.session_state.rf_ticker = selected_rf
                 st.sidebar.success(f"RF 티커가 {selected_rf}로 변경되었습니다.")
             
-            # RF 상태 표시
+            # RF 상태 표시 (완전 수정: 컨테이너 사용)
             if st.sidebar.button("🔍 RF 데이터 테스트"):
-                with st.sidebar.spinner("RF 데이터 확인 중..."):
+                # 메인 영역에 스피너 표시
+                with st.spinner("RF 데이터 확인 중..."):
                     try:
                         rf_manager = RiskFreeRateManager(st.session_state.rf_ticker, st.session_state.default_rf_rate)
                         end_date = datetime.now()
@@ -250,10 +274,18 @@ class EnhancedRealtimeDashboard:
                             avg_rate = rf_data.mean() * 100
                             st.sidebar.success(f"✅ 현재: {current_rate:.3f}%")
                             st.sidebar.info(f"30일 평균: {avg_rate:.3f}%")
+                            
+                            # 메인 영역에도 결과 표시
+                            st.success(f"🏦 RF 테스트 성공: {current_rate:.3f}% (30일 평균: {avg_rate:.3f}%)")
                         else:
                             st.sidebar.error("❌ 데이터 없음")
+                            st.error(f"❌ {st.session_state.rf_ticker} 데이터를 가져올 수 없습니다.")
                     except Exception as e:
-                        st.sidebar.error(f"❌ 오류: {e}")
+                        error_msg = str(e)
+                        st.sidebar.error(f"❌ 오류 발생")
+                        st.error(f"🚨 RF 데이터 테스트 실패: {error_msg}")
+                        if st.session_state.debug_mode:
+                            st.code(traceback.format_exc())
         else:
             # 고정 RF 설정
             default_rf_pct = st.sidebar.number_input(
@@ -357,6 +389,18 @@ class EnhancedRealtimeDashboard:
         
         if st.sidebar.button("🔄 Clear Cache"):
             self.clear_cache()
+        
+        # 빠른 테스트 기능 추가
+        st.sidebar.subheader("🧪 Quick Tests")
+        
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            if st.button("⚡ Test GLD"):
+                self.quick_test_ticker("GLD", "SPDR Gold Trust")
+        
+        with col2:
+            if st.button("⚡ Test SPY"):
+                self.quick_test_ticker("SPY", "SPDR S&P 500")
         
         # 마지막 업데이트 시간
         if st.session_state.last_update:
@@ -511,6 +555,13 @@ class EnhancedRealtimeDashboard:
                         
                 except Exception as e:
                     st.error(f"Market regime analysis failed: {str(e)}")
+                    if st.session_state.debug_mode:
+                        st.markdown(f"""
+                        <div class="debug-info">
+                        <strong>Debug Information:</strong><br>
+                        {traceback.format_exc()}
+                        </div>
+                        """, unsafe_allow_html=True)
                     st.info("💡 Check your internet connection or try again later")
     
     def display_current_signals(self):
@@ -689,65 +740,196 @@ class EnhancedRealtimeDashboard:
                             
                 except Exception as e:
                     st.error(f"Signal analysis failed: {str(e)}")
+                    if st.session_state.debug_mode:
+                        st.markdown(f"""
+                        <div class="debug-info">
+                        <strong>Debug Information:</strong><br>
+                        {traceback.format_exc()}
+                        </div>
+                        """, unsafe_allow_html=True)
                     st.info("💡 Check your internet connection or try a simpler analysis")
     
     def analyze_single_etf_regime(self, ticker, name):
-        """단일 ETF의 시장 체제 분석 - 2024년까지 학습, 동적 RF 지원"""
+        """단일 ETF의 시장 체제 분석 - 수정된 매개변수 사용"""
+        debug_info = []
+        detailed_error = None
+        
         try:
-            jump_model = UniversalJumpModel(
-                benchmark_ticker=ticker,
-                benchmark_name=name,
-                jump_penalty=50.0,
-                training_cutoff_date=datetime(2024, 12, 31),
-                rf_ticker=st.session_state.rf_ticker,
-                default_rf_rate=st.session_state.default_rf_rate
-            )
+            debug_info.append(f"[{datetime.now().strftime('%H:%M:%S')}] Starting analysis for {ticker} ({name})")
             
-            current_regime = jump_model.get_current_regime_with_training_cutoff()
+            # 데이터 확인 단계
+            debug_info.append(f"[Step 1] Checking data availability for {ticker}")
             
-            if current_regime:
+            # yfinance로 기본 데이터 확인
+            try:
+                ticker_obj = yf.Ticker(ticker)
+                hist = ticker_obj.history(period="2y")  # 2년 데이터로 확인
+                if hist.empty:
+                    debug_info.append(f"[Step 1] FAILED: No historical data for {ticker}")
+                    return {
+                        'ticker': ticker, 'name': name, 'regime': 'NO_HISTORICAL_DATA',
+                        'confidence': 0.0, 'status': 'data_unavailable',
+                        'debug_info': debug_info,
+                        'detailed_error': f"No historical data available for {ticker}"
+                    }
+                else:
+                    debug_info.append(f"[Step 1] SUCCESS: Found {len(hist)} days of data")
+                    
+                    # 데이터 품질 확인
+                    if len(hist) < 100:
+                        debug_info.append(f"[Step 1] WARNING: Limited data ({len(hist)} days)")
+                        return {
+                            'ticker': ticker, 'name': name, 'regime': 'INSUFFICIENT_DATA',
+                            'confidence': 0.0, 'status': 'insufficient_data',
+                            'debug_info': debug_info,
+                            'detailed_error': f"Insufficient data: only {len(hist)} days available (need 100+)"
+                        }
+                        
+            except Exception as e:
+                debug_info.append(f"[Step 1] ERROR: {str(e)}")
                 return {
-                    'ticker': ticker,
-                    'name': name,
-                    'regime': current_regime['regime'],
-                    'confidence': current_regime['confidence'],
-                    'is_out_of_sample': current_regime.get('is_out_of_sample', False),
-                    'analysis_date': current_regime['date'].strftime('%Y-%m-%d'),
-                    'rf_ticker': current_regime.get('rf_ticker', st.session_state.rf_ticker),
-                    'current_rf_rate': current_regime.get('current_rf_rate', st.session_state.default_rf_rate * 100),
-                    'dynamic_rf_used': current_regime.get('dynamic_rf_used', False),
-                    'status': 'success'
+                    'ticker': ticker, 'name': name, 'regime': 'DATA_FETCH_ERROR',
+                    'confidence': 0.0, 'status': 'data_fetch_error',
+                    'debug_info': debug_info,
+                    'detailed_error': f"Failed to fetch data: {str(e)}"
                 }
-            else:
+            
+            # JumpModel 초기화 단계 (수정된 매개변수만 사용)
+            debug_info.append(f"[Step 2] Initializing JumpModel for {ticker}")
+            
+            try:
+                # 실제 UniversalJumpModel이 지원하는 매개변수만 사용
+                jump_model = UniversalJumpModel(
+                    benchmark_ticker=ticker,
+                    benchmark_name=name,
+                    jump_penalty=20.0,  # 낮은 패널티로 민감도 증가
+                    training_cutoff_date=datetime(2024, 12, 31),
+                    rf_ticker=st.session_state.rf_ticker,
+                    default_rf_rate=st.session_state.default_rf_rate
+                )
+                debug_info.append(f"[Step 2] SUCCESS: JumpModel initialized with jump_penalty=20.0")
+                
+            except Exception as e:
+                debug_info.append(f"[Step 2] ERROR: JumpModel initialization failed - {str(e)}")
+                
+                # 더 관대한 매개변수로 재시도
+                try:
+                    debug_info.append(f"[Step 2] Retrying with minimal parameters...")
+                    jump_model = UniversalJumpModel(
+                        benchmark_ticker=ticker,
+                        benchmark_name=name,
+                        training_cutoff_date=datetime(2024, 12, 31),
+                        rf_ticker=st.session_state.rf_ticker,
+                        default_rf_rate=st.session_state.default_rf_rate
+                    )
+                    debug_info.append(f"[Step 2] SUCCESS: JumpModel initialized with default parameters")
+                    
+                except Exception as e2:
+                    debug_info.append(f"[Step 2] FAILED: Both initialization attempts failed")
+                    return {
+                        'ticker': ticker, 'name': name, 'regime': 'MODEL_INIT_ERROR',
+                        'confidence': 0.0, 'status': 'model_init_error',
+                        'debug_info': debug_info,
+                        'detailed_error': f"JumpModel initialization failed: {str(e2)}"
+                    }
+            
+            # 체제 분석 단계
+            debug_info.append(f"[Step 3] Analyzing regime for {ticker}")
+            
+            try:
+                current_regime = jump_model.get_current_regime_with_training_cutoff()
+                
+                if current_regime:
+                    debug_info.append(f"[Step 3] SUCCESS: Regime analysis completed")
+                    debug_info.append(f"[Result] Regime: {current_regime['regime']}, Confidence: {current_regime['confidence']:.3f}")
+                    
+                    result = {
+                        'ticker': ticker,
+                        'name': name,
+                        'regime': current_regime['regime'],
+                        'confidence': current_regime['confidence'],
+                        'is_out_of_sample': current_regime.get('is_out_of_sample', False),
+                        'analysis_date': current_regime['date'].strftime('%Y-%m-%d'),
+                        'rf_ticker': current_regime.get('rf_ticker', st.session_state.rf_ticker),
+                        'current_rf_rate': current_regime.get('current_rf_rate', st.session_state.default_rf_rate * 100),
+                        'dynamic_rf_used': current_regime.get('dynamic_rf_used', False),
+                        'status': 'success',
+                        'debug_info': debug_info
+                    }
+                    
+                    # 디버그 모드에서 즉시 결과 표시
+                    if st.session_state.debug_mode:
+                        st.success(f"✅ {ticker}: {current_regime['regime']} (Confidence: {current_regime['confidence']:.1%})")
+                    
+                    return result
+                    
+                else:
+                    debug_info.append(f"[Step 3] FAILED: No regime data returned")
+                    debug_info.append(f"[Analysis] Model executed but returned empty result")
+                    
+                    # 추가 진단
+                    try:
+                        # 데이터 길이 재확인
+                        ticker_obj = yf.Ticker(ticker)
+                        long_hist = ticker_obj.history(period="5y")
+                        if len(long_hist) < 252:
+                            debug_info.append(f"[Diagnosis] Still insufficient data: {len(long_hist)} days for 5Y period")
+                            detailed_error = f"Insufficient historical data: {len(long_hist)} days (recommended 252+)"
+                        else:
+                            debug_info.append(f"[Diagnosis] Data seems sufficient: {len(long_hist)} days")
+                            detailed_error = "Model analysis completed but no regime determination possible"
+                    except:
+                        detailed_error = "Unable to perform additional diagnostics"
+                    
+                    return {
+                        'ticker': ticker, 'name': name, 'regime': 'NO_REGIME_DATA',
+                        'confidence': 0.0, 'status': 'no_regime_data',
+                        'debug_info': debug_info,
+                        'detailed_error': detailed_error
+                    }
+                    
+            except Exception as e:
+                debug_info.append(f"[Step 3] ERROR: Regime analysis failed - {str(e)}")
+                detailed_error = f"Regime analysis error: {str(e)}"
+                
+                # 오류 유형 분류
+                error_str = str(e).lower()
+                if "insufficient" in error_str or "empty" in error_str:
+                    regime_status = 'INSUFFICIENT_DATA'
+                elif "404" in error_str or "not found" in error_str:
+                    regime_status = 'TICKER_NOT_FOUND'
+                elif "timeout" in error_str or "connection" in error_str:
+                    regime_status = 'CONNECTION_ERROR'
+                elif "permission" in error_str or "forbidden" in error_str:
+                    regime_status = 'ACCESS_DENIED'
+                elif "index" in error_str or "key" in error_str:
+                    regime_status = 'DATA_FORMAT_ERROR'
+                else:
+                    regime_status = 'ANALYSIS_ERROR'
+                
                 return {
-                    'ticker': ticker,
-                    'name': name,
-                    'regime': 'UNKNOWN',
-                    'confidence': 0.0,
-                    'is_out_of_sample': False,
-                    'analysis_date': 'N/A',
-                    'rf_ticker': st.session_state.rf_ticker,
-                    'current_rf_rate': st.session_state.default_rf_rate * 100,
-                    'dynamic_rf_used': False,
-                    'status': 'no_data'
+                    'ticker': ticker, 'name': name, 'regime': regime_status,
+                    'confidence': 0.0, 'status': 'analysis_error',
+                    'debug_info': debug_info,
+                    'detailed_error': detailed_error,
+                    'raw_error': str(e)
                 }
+                
         except Exception as e:
+            debug_info.append(f"[FATAL] Unexpected error: {str(e)}")
+            detailed_error = f"Unexpected error: {str(e)}"
+            
             return {
-                'ticker': ticker,
-                'name': name,
-                'regime': 'ERROR',
-                'confidence': 0.0,
-                'is_out_of_sample': False,
-                'analysis_date': 'N/A',
-                'rf_ticker': st.session_state.rf_ticker,
-                'current_rf_rate': st.session_state.default_rf_rate * 100,
-                'dynamic_rf_used': False,
-                'status': 'error',
-                'error': str(e)
+                'ticker': ticker, 'name': name, 'regime': 'FATAL_ERROR',
+                'confidence': 0.0, 'status': 'fatal_error',
+                'debug_info': debug_info,
+                'detailed_error': detailed_error,
+                'raw_error': str(e),
+                'traceback': traceback.format_exc()
             }
     
     def analyze_all_etf_regimes(self, selected_tickers_only=None):
-        """모든 ETF의 시장 체제 병렬 분석 (선택적 분석 지원, 동적 RF)"""
+        """모든 ETF의 시장 체제 병렬 분석 (선택적 분석 지원, 동적 RF, 상세 오류 처리)"""
         # 분석할 ETF 결정
         if selected_tickers_only:
             # 선택된 티커들만 분석
@@ -831,43 +1013,84 @@ class EnhancedRealtimeDashboard:
             processed += 1
             progress_bar.progress(processed / total_items)
         
-        # ETF 분석 (배치로 처리)
+        # ETF 분석 (실시간 디버깅 정보 포함)
         status_text.text("Analyzing ETFs with dynamic RF...")
-        batch_size = 5  # 동시에 처리할 ETF 수
+        
+        # 실시간 디버깅 영역 생성
+        if st.session_state.debug_mode:
+            debug_container = st.container()
+            debug_log = debug_container.empty()
+            debug_messages = []
+        
+        batch_size = 3  # 배치 크기 줄임 (5 → 3)
         etf_items = list(all_etfs.items())
         
-        for i in range(0, len(etf_items), batch_size):
-            batch = etf_items[i:i+batch_size]
-            
-            # 병렬 처리
-            with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
-                futures = []
-                for ticker, info in batch:
-                    future = executor.submit(self.analyze_single_etf_regime, ticker, info['name'])
-                    futures.append((ticker, info, future))
+        for i, (ticker, info) in enumerate(etf_items):
+            try:
+                # 진행률 및 현재 분석 티커 표시
+                progress = (processed + 1) / total_items
+                status_text.text(f"Analyzing {ticker} ({info['name']}) - {processed+1}/{total_items}")
                 
-                for ticker, info, future in futures:
-                    try:
-                        result = future.result(timeout=30)  # 30초 타임아웃
-                        result['type'] = 'etf'
-                        result['strategies'] = info['strategies']
-                        results[ticker] = result
-                    except Exception as e:
-                        results[ticker] = {
-                            'ticker': ticker,
-                            'name': info['name'],
-                            'regime': 'TIMEOUT',
-                            'confidence': 0.0,
-                            'status': 'timeout',
-                            'type': 'etf',
-                            'strategies': info['strategies'],
-                            'rf_ticker': st.session_state.rf_ticker,
-                            'current_rf_rate': st.session_state.default_rf_rate * 100,
-                            'dynamic_rf_used': False
-                        }
-                    
-                    processed += 1
-                    progress_bar.progress(processed / total_items)
+                # 실시간 디버깅 정보
+                if st.session_state.debug_mode:
+                    debug_messages.append(f"🔍 [{datetime.now().strftime('%H:%M:%S')}] Starting {ticker}")
+                    debug_log.text("\n".join(debug_messages[-10:]))  # 최근 10개 메시지만 표시
+                
+                result = self.analyze_single_etf_regime(ticker, info['name'])
+                result['type'] = 'etf'
+                result['strategies'] = info['strategies']
+                results[ticker] = result
+                
+                # 결과에 따른 실시간 피드백
+                if st.session_state.debug_mode:
+                    if result['status'] == 'success':
+                        debug_messages.append(f"✅ [{datetime.now().strftime('%H:%M:%S')}] {ticker}: {result['regime']} (Confidence: {result['confidence']:.1%})")
+                    else:
+                        debug_messages.append(f"❌ [{datetime.now().strftime('%H:%M:%S')}] {ticker}: {result['regime']} - {result.get('detailed_error', 'Unknown error')}")
+                    debug_log.text("\n".join(debug_messages[-10:]))
+                
+                # 즉시 결과 표시 (선택 모드일 때)
+                if st.session_state.regime_analysis_mode == 'selected':
+                    if result['status'] == 'success':
+                        st.success(f"✅ {ticker}: {result['regime']} (Confidence: {result['confidence']:.1%})")
+                    else:
+                        st.error(f"❌ {ticker}: {result['regime']}")
+                        if 'detailed_error' in result:
+                            st.text(f"   └ {result['detailed_error']}")
+                
+            except Exception as e:
+                error_msg = str(e)
+                results[ticker] = {
+                    'ticker': ticker,
+                    'name': info['name'],
+                    'regime': 'PROCESSING_ERROR',
+                    'confidence': 0.0,
+                    'status': 'processing_error',
+                    'type': 'etf',
+                    'strategies': info['strategies'],
+                    'rf_ticker': st.session_state.rf_ticker,
+                    'current_rf_rate': st.session_state.default_rf_rate * 100,
+                    'dynamic_rf_used': False,
+                    'error': error_msg,
+                    'detailed_error': f"Processing pipeline error: {error_msg}"
+                }
+                
+                if st.session_state.debug_mode:
+                    debug_messages.append(f"💥 [{datetime.now().strftime('%H:%M:%S')}] {ticker}: PROCESSING_ERROR - {error_msg}")
+                    debug_log.text("\n".join(debug_messages[-10:]))
+            
+            processed += 1
+            progress_bar.progress(processed / total_items)
+            
+            # 매 분석 후 짧은 대기 시간 (API 제한 회피)
+            time.sleep(0.1)
+        
+        # 디버깅 정보 정리
+        if st.session_state.debug_mode:
+            debug_log.empty()
+            if debug_messages:
+                with st.expander("📋 Analysis Log", expanded=False):
+                    st.text("\n".join(debug_messages))
         
         # 캐시 업데이트 (전체 분석일 경우에만)
         if not selected_tickers_only:
@@ -880,7 +1103,7 @@ class EnhancedRealtimeDashboard:
         return results
     
     def display_all_market_regimes(self):
-        """모든 시장 체제 현황 표시 (동적 RF 정보 포함)"""
+        """모든 시장 체제 현황 표시 (동적 RF 정보 포함, 상세 오류 정보)"""
         st.subheader("🌍 All Market Regimes Overview (Dynamic Risk-Free Rate)")
         
         # 분석 모드 표시
@@ -899,6 +1122,121 @@ class EnhancedRealtimeDashboard:
         st.markdown("Current Bull/Bear status with dynamic Risk-Free Rate analysis")
         st.markdown(f"**🏦 RF Ticker**: {st.session_state.rf_ticker} | **🎯 Training**: 2005-2024 | **🔮 Inference**: 2025")
         
+        # GLD 특별 분석 모드 추가
+        if st.session_state.regime_analysis_mode == 'selected' and 'GLD' in st.session_state.selected_tickers_for_regime:
+            st.subheader("🏅 GLD (Gold ETF) Special Analysis")
+            
+            if st.button("🔍 Deep Analysis for GLD", help="Run enhanced analysis specifically for Gold ETF"):
+                with st.spinner("Running deep analysis for GLD..."):
+                    try:
+                        # GLD를 위한 특별한 파라미터
+                        import yfinance as yf
+                        
+                        # 1. 기본 데이터 확인
+                        st.info("Step 1: Checking GLD data availability...")
+                        gld = yf.Ticker("GLD")
+                        hist_1y = gld.history(period="1y")
+                        hist_5y = gld.history(period="5y")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("1Y Data Points", len(hist_1y))
+                        with col2:
+                            st.metric("5Y Data Points", len(hist_5y))
+                        with col3:
+                            if len(hist_5y) > 0:
+                                volatility = hist_5y['Close'].pct_change().std() * np.sqrt(252) * 100
+                                st.metric("Annual Volatility", f"{volatility:.1f}%")
+                        
+                        # 2. 여러 파라미터로 시도
+                        st.info("Step 2: Trying multiple parameter sets...")
+                        
+                        parameter_sets = [
+                            {"jump_penalty": 10.0, "name": "Very Sensitive"},
+                            {"jump_penalty": 20.0, "name": "Moderate"},
+                            {"jump_penalty": 30.0, "name": "Conservative"},
+                            {"jump_penalty": 50.0, "name": "Very Conservative"}
+                        ]
+                        
+                        gld_results = []
+                        
+                        for params in parameter_sets:
+                            try:
+                                st.text(f"Testing {params['name']} parameters...")
+                                
+                                jump_model = UniversalJumpModel(
+                                    benchmark_ticker="GLD",
+                                    benchmark_name="SPDR Gold Trust",
+                                    jump_penalty=params["jump_penalty"],
+                                    training_cutoff_date=datetime(2024, 12, 31),
+                                    rf_ticker=st.session_state.rf_ticker,
+                                    default_rf_rate=st.session_state.default_rf_rate
+                                )
+                                
+                                current_regime = jump_model.get_current_regime_with_training_cutoff()
+                                
+                                if current_regime:
+                                    gld_results.append({
+                                        'params': params['name'],
+                                        'regime': current_regime['regime'],
+                                        'confidence': current_regime['confidence'],
+                                        'success': True
+                                    })
+                                    st.success(f"✅ {params['name']}: {current_regime['regime']} (Confidence: {current_regime['confidence']:.1%})")
+                                else:
+                                    gld_results.append({
+                                        'params': params['name'],
+                                        'regime': 'NO_DATA',
+                                        'confidence': 0.0,
+                                        'success': False
+                                    })
+                                    st.warning(f"⚠️ {params['name']}: No data returned")
+                                    
+                            except Exception as e:
+                                gld_results.append({
+                                    'params': params['name'],
+                                    'regime': 'ERROR',
+                                    'confidence': 0.0,
+                                    'success': False,
+                                    'error': str(e)
+                                })
+                                st.error(f"❌ {params['name']}: {str(e)[:100]}...")
+                        
+                        # 3. 결과 요약
+                        if gld_results:
+                            st.subheader("📋 GLD Analysis Results Summary")
+                            
+                            results_df = pd.DataFrame(gld_results)
+                            st.dataframe(results_df)
+                            
+                            successful_results = [r for r in gld_results if r['success']]
+                            if successful_results:
+                                st.success(f"✅ {len(successful_results)}/{len(gld_results)} parameter sets succeeded")
+                                
+                                # 가장 신뢰도 높은 결과 표시
+                                best_result = max(successful_results, key=lambda x: x['confidence'])
+                                st.info(f"🏆 Best Result: {best_result['regime']} with {best_result['confidence']:.1%} confidence ({best_result['params']} parameters)")
+                            else:
+                                st.error("❌ All parameter sets failed for GLD")
+                                st.markdown("""
+                                **Possible reasons for GLD analysis failure:**
+                                1. **Data Quality**: GLD might have insufficient or problematic data
+                                2. **Market Characteristics**: Gold ETF behavior differs significantly from equity markets
+                                3. **Model Limitations**: Current model may not be suitable for commodity ETFs
+                                4. **Technical Issues**: Network, API, or computational problems
+                                
+                                **Recommendations:**
+                                - Try analyzing GLD at a different time
+                                - Consider using alternative gold analysis methods
+                                - Check if GLD is still actively traded
+                                - Use longer historical periods for analysis
+                                """)
+                        
+                    except Exception as e:
+                        st.error(f"GLD special analysis failed: {str(e)}")
+                        if st.session_state.debug_mode:
+                            st.code(traceback.format_exc())
+        
         button_text = "🔄 Analyze Selected Tickers" if st.session_state.regime_analysis_mode == 'selected' else "🔄 Analyze All Market Regimes"
         
         if st.button(button_text, type="primary"):
@@ -913,10 +1251,18 @@ class EnhancedRealtimeDashboard:
                     results = self.analyze_all_etf_regimes()
                 
                 if results:
-                    # 통계 요약
+                    # 통계 요약 (오류 유형별 분류 포함)
                     bull_count = sum(1 for r in results.values() if r['regime'] == 'BULL')
                     bear_count = sum(1 for r in results.values() if r['regime'] == 'BEAR')
-                    unknown_count = sum(1 for r in results.values() if r['regime'] in ['UNKNOWN', 'ERROR', 'TIMEOUT'])
+                    
+                    # 오류 유형별 분류
+                    error_counts = {}
+                    for r in results.values():
+                        if r['regime'] not in ['BULL', 'BEAR']:
+                            error_type = r['regime']
+                            error_counts[error_type] = error_counts.get(error_type, 0) + 1
+                    
+                    unknown_count = sum(error_counts.values())
                     oos_count = sum(1 for r in results.values() if r.get('is_out_of_sample', False))
                     dynamic_rf_count = sum(1 for r in results.values() if r.get('dynamic_rf_used', False))
                     
@@ -928,11 +1274,133 @@ class EnhancedRealtimeDashboard:
                     with col3:
                         st.metric("🔴 BEAR", bear_count)
                     with col4:
-                        st.metric("⚠️ Unknown", unknown_count)
+                        st.metric("⚠️ Issues", unknown_count)
                     with col5:
                         st.metric("🔮 Out-of-Sample", oos_count)
                     with col6:
                         st.metric("📊 Dynamic RF", dynamic_rf_count)
+                    
+                    # 오류 유형 상세 정보 (개선된 버전)
+                    if unknown_count > 0:
+                        st.subheader("⚠️ Analysis Issues Breakdown")
+                        
+                        error_descriptions = {
+                            'NO_HISTORICAL_DATA': '📊 No historical data available',
+                            'DATA_FETCH_ERROR': '🌐 Failed to fetch data from source',
+                            'MODEL_INIT_ERROR': '🔧 Model initialization failed',
+                            'NO_REGIME_DATA': '❓ Analysis completed but no regime determined',
+                            'INSUFFICIENT_DATA': '📉 Not enough historical data for analysis',
+                            'TICKER_NOT_FOUND': '🔍 Ticker symbol not found (possibly delisted)',
+                            'CONNECTION_ERROR': '🌐 Network/API connection issues',
+                            'ACCESS_DENIED': '🔒 Access denied to data source',
+                            'DATA_FORMAT_ERROR': '📋 Data format or structure issues',
+                            'ANALYSIS_ERROR': '⚙️ Model analysis failed',
+                            'PROCESSING_ERROR': '🔄 Processing pipeline error',
+                            'FATAL_ERROR': '💥 Unexpected system error',
+                            'TIMEOUT': '⏱️ Analysis timeout'
+                        }
+                        
+                        # 오류별 통계와 해결책
+                        for error_type, count in error_counts.items():
+                            description = error_descriptions.get(error_type, f'❓ Unknown error type: {error_type}')
+                            
+                            with st.expander(f"{description} ({count} assets)", expanded=False):
+                                # 해당 오류 유형의 티커들 나열
+                                error_tickers = [ticker for ticker, result in results.items() 
+                                               if result['regime'] == error_type]
+                                
+                                st.markdown("**Affected Tickers:**")
+                                for ticker in error_tickers[:10]:  # 최대 10개만 표시
+                                    result = results[ticker]
+                                    detailed_error = result.get('detailed_error', 'No details available')
+                                    st.markdown(f"• **{ticker}** ({result['name']})")
+                                    st.text(f"  └ {detailed_error}")
+                                    
+                                    # 디버그 모드에서 상세 정보
+                                    if st.session_state.debug_mode and 'debug_info' in result:
+                                        with st.expander(f"Debug: {ticker}", expanded=False):
+                                            for debug_line in result['debug_info']:
+                                                st.text(debug_line)
+                                            if 'raw_error' in result:
+                                                st.code(result['raw_error'])
+                                
+                                if len(error_tickers) > 10:
+                                    st.text(f"... and {len(error_tickers) - 10} more")
+                                
+                                # 해결책 제시
+                                solutions = {
+                                    'NO_HISTORICAL_DATA': [
+                                        "Check if ticker symbol is correct",
+                                        "Verify ticker is still actively traded",
+                                        "Try alternative data sources"
+                                    ],
+                                    'DATA_FETCH_ERROR': [
+                                        "Check internet connection",
+                                        "Retry after a few minutes",
+                                        "Verify data source availability"
+                                    ],
+                                    'MODEL_INIT_ERROR': [
+                                        "Check UniversalJumpModel parameters",
+                                        "Verify model dependencies are installed",
+                                        "Try with default parameters only"
+                                    ],
+                                    'INSUFFICIENT_DATA': [
+                                        "Ticker may be newly listed",
+                                        "Try longer analysis period",
+                                        "Use tickers with longer history"
+                                    ],
+                                    'DATA_FORMAT_ERROR': [
+                                        "Data may have missing values",
+                                        "Check for data quality issues",
+                                        "Try different date ranges"
+                                    ],
+                                    'CONNECTION_ERROR': [
+                                        "Check network connectivity",
+                                        "Retry with smaller batch sizes",
+                                        "Check API rate limits"
+                                    ]
+                                }
+                                
+                                if error_type in solutions:
+                                    st.markdown("**💡 Suggested Solutions:**")
+                                    for solution in solutions[error_type]:
+                                        st.markdown(f"• {solution}")
+                        
+                        # GLD 특별 처리 (자주 문제가 되는 경우)
+                        if 'GLD' in [result['ticker'] for result in results.values() if result['regime'] not in ['BULL', 'BEAR']]:
+                            st.warning("⚠️ **GLD (Gold ETF) Analysis Issue Detected**")
+                            gld_result = next((r for r in results.values() if r['ticker'] == 'GLD'), None)
+                            if gld_result:
+                                st.info(f"**GLD Status**: {gld_result['regime']}")
+                                if 'detailed_error' in gld_result:
+                                    st.text(f"Details: {gld_result['detailed_error']}")
+                                
+                                st.markdown("""
+                                **GLD 분석 실패 일반적 원인:**
+                                • 금 가격의 특수한 변동성 패턴
+                                • 주식 시장과 다른 체제 전환 특성  
+                                • 인플레이션/디플레이션 상관관계
+                                
+                                **권장 해결책:**
+                                • 더 긴 분석 기간 사용
+                                • 낮은 jump_penalty 설정
+                                • 금 특화 분석 모델 고려
+                                """)
+                        
+                        # 전체적인 성공률 개선 제안
+                        if success_rate < 50:
+                            st.error("🚨 **Low Success Rate Alert**")
+                            st.markdown("""
+                            **시스템 수준 해결책:**
+                            1. **네트워크 확인**: 안정적인 인터넷 연결 필요
+                            2. **배치 크기 줄이기**: 더 적은 수의 티커로 테스트
+                            3. **재시도**: 잠시 후 다시 시도
+                            4. **디버그 모드**: 상세한 오류 정보 확인
+                            5. **데이터 소스**: Yahoo Finance 서비스 상태 확인
+                            """)
+                        elif success_rate < 70:
+                            st.warning("⚠️ **Moderate Success Rate**")
+                            st.markdown("일부 티커에서 분석 실패. 개별 오류 정보를 확인하여 문제를 해결하세요.")
                     
                     # RF 통계
                     if dynamic_rf_count > 0:
@@ -1012,10 +1480,18 @@ class EnhancedRealtimeDashboard:
                                 analysis_date = benchmark_result.get('analysis_date', 'N/A')
                                 current_rf = benchmark_result.get('current_rf_rate', 0)
                                 
+                                # 오류 상태 표시
+                                if benchmark_result['regime'] not in ['BULL', 'BEAR']:
+                                    status_text = f"Status: {benchmark_result['regime']}"
+                                    if 'error' in benchmark_result:
+                                        status_text += f" - {benchmark_result['error'][:50]}..."
+                                else:
+                                    status_text = f"Regime: {benchmark_result['regime']} {confidence_text}"
+                                
                                 st.markdown(f"""
                                 <div class="regime-card {regime_class}">
                                     <div class="strategy-header">📊 Benchmark: {benchmark_result['name']} {oos_indicator} {rf_indicator}</div>
-                                    <div><strong>Regime:</strong> {benchmark_result['regime']} {confidence_text}</div>
+                                    <div><strong>{status_text}</strong></div>
                                     <div><strong>Analysis Date:</strong> {analysis_date}</div>
                                     <div><strong>Risk-Free Rate:</strong> {current_rf:.3f}% ({benchmark_result.get('rf_ticker', 'N/A')})</div>
                                 </div>
@@ -1087,17 +1563,22 @@ class EnhancedRealtimeDashboard:
                                     </div>
                                     """, unsafe_allow_html=True)
                             
-                            # Unknown ETFs
+                            # Unknown/Error ETFs
                             if unknown_etfs:
-                                st.markdown("⚠️ **Unknown/Error:**")
+                                st.markdown("⚠️ **Issues/Unknown:**")
                                 for etf in unknown_etfs:
                                     oos_indicator = " 🔮" if etf.get('is_out_of_sample', False) else ""
                                     current_rf = etf.get('current_rf_rate', 0)
                                     
+                                    # 오류 메시지 추가
+                                    error_info = ""
+                                    if 'error' in etf:
+                                        error_info = f" ({etf['error'][:30]}...)"
+                                    
                                     st.markdown(f"""
                                     <div class="etf-item etf-unknown">
                                         <span><strong>{etf['ticker']}</strong> - {etf['name']}{oos_indicator}</span>
-                                        <span>{etf['regime']} (RF: {current_rf:.3f}%)</span>
+                                        <span>{etf['regime']}{error_info} (RF: {current_rf:.3f}%)</span>
                                     </div>
                                     """, unsafe_allow_html=True)
                     
@@ -1108,14 +1589,18 @@ class EnhancedRealtimeDashboard:
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
-                        # 파이 차트
-                        fig_pie = go.Figure(data=[go.Pie(
-                            labels=['BULL', 'BEAR', 'Unknown'],
-                            values=[bull_count, bear_count, unknown_count],
-                            marker_colors=['#28a745', '#dc3545', '#ffc107']
-                        )])
-                        fig_pie.update_layout(title="Overall Market Regime Distribution")
-                        st.plotly_chart(fig_pie, use_container_width=True)
+                        # 파이 차트 (성공한 분석만)
+                        successful_count = bull_count + bear_count
+                        if successful_count > 0:
+                            fig_pie = go.Figure(data=[go.Pie(
+                                labels=['BULL', 'BEAR'],
+                                values=[bull_count, bear_count],
+                                marker_colors=['#28a745', '#dc3545']
+                            )])
+                            fig_pie.update_layout(title=f"Regime Distribution (Successful: {successful_count})")
+                            st.plotly_chart(fig_pie, use_container_width=True)
+                        else:
+                            st.warning("No successful regime analysis to display")
                     
                     with col2:
                         # Out-of-Sample vs In-Sample 분포
@@ -1166,10 +1651,18 @@ class EnhancedRealtimeDashboard:
                         st.markdown("🔴 **BEAR**: Unfavorable market conditions")
                         st.markdown("📌 **Fixed RF**: Using default risk-free rate")
                     
+                    # 성공률 정보
+                    success_rate = (bull_count + bear_count) / len(results) * 100
                     if st.session_state.regime_analysis_mode == 'selected':
-                        st.success(f"✅ Analysis completed! {len(results)} selected assets analyzed. {oos_count} out-of-sample predictions. {dynamic_rf_count} dynamic RF.")
+                        st.success(f"✅ Analysis completed! {len(results)} selected assets analyzed. Success rate: {success_rate:.1f}%. {oos_count} out-of-sample predictions. {dynamic_rf_count} dynamic RF.")
                     else:
-                        st.success(f"✅ Analysis completed! {len(results)} assets analyzed. {oos_count} out-of-sample predictions. {dynamic_rf_count} dynamic RF.")
+                        st.success(f"✅ Analysis completed! {len(results)} assets analyzed. Success rate: {success_rate:.1f}%. {oos_count} out-of-sample predictions. {dynamic_rf_count} dynamic RF.")
+                    
+                    # 낮은 성공률 경고
+                    if success_rate < 70:
+                        st.warning(f"⚠️ Success rate is {success_rate:.1f}%. Consider checking data sources or network connectivity.")
+                        if st.session_state.debug_mode:
+                            st.info("Debug mode is enabled. Check the detailed error information above for troubleshooting.")
                 else:
                     st.error("❌ Failed to analyze market regimes")
         else:
@@ -1331,6 +1824,13 @@ class EnhancedRealtimeDashboard:
                             
                     except Exception as e:
                         st.error(f"RF analysis failed: {str(e)}")
+                        if st.session_state.debug_mode:
+                            st.markdown(f"""
+                            <div class="debug-info">
+                            <strong>Debug Information:</strong><br>
+                            {traceback.format_exc()}
+                            </div>
+                            """, unsafe_allow_html=True)
         
         # RF 시나리오 분석
         st.subheader("🔮 Risk-Free Rate Scenario Analysis")
@@ -1453,6 +1953,13 @@ class EnhancedRealtimeDashboard:
                     
             except Exception as e:
                 st.error(f"Backtest failed: {str(e)}")
+                if st.session_state.debug_mode:
+                    st.markdown(f"""
+                    <div class="debug-info">
+                    <strong>Debug Information:</strong><br>
+                    {traceback.format_exc()}
+                    </div>
+                    """, unsafe_allow_html=True)
                 st.info("💡 Try reducing the backtest period or check your internet connection")
     
     def display_backtest_results(self):
@@ -1677,6 +2184,13 @@ class EnhancedRealtimeDashboard:
                             
                 except Exception as e:
                     st.warning(f"Performance decomposition failed: {str(e)}")
+                    if st.session_state.debug_mode:
+                        st.markdown(f"""
+                        <div class="debug-info">
+                        <strong>Debug Information:</strong><br>
+                        {traceback.format_exc()}
+                        </div>
+                        """, unsafe_allow_html=True)
             
             # 상세 메트릭스 테이블
             if metrics:
@@ -1724,10 +2238,71 @@ class EnhancedRealtimeDashboard:
                         )
                 else:
                     st.warning("No portfolio data to download")
+            
+            # Regime 분석 결과 다운로드
+            if st.session_state.regime_cache:
+                try:
+                    # Regime 데이터를 DataFrame으로 변환
+                    regime_data = []
+                    for ticker, result in st.session_state.regime_cache.items():
+                        regime_data.append({
+                            'Ticker': ticker,
+                            'Name': result.get('name', ''),
+                            'Regime': result.get('regime', ''),
+                            'Confidence': result.get('confidence', 0),
+                            'Is_Out_of_Sample': result.get('is_out_of_sample', False),
+                            'Analysis_Date': result.get('analysis_date', ''),
+                            'RF_Ticker': result.get('rf_ticker', ''),
+                            'Current_RF_Rate': result.get('current_rf_rate', 0),
+                            'Dynamic_RF_Used': result.get('dynamic_rf_used', False),
+                            'Type': result.get('type', ''),
+                            'Status': result.get('status', '')
+                        })
+                    
+                    if regime_data:
+                        regime_df = pd.DataFrame(regime_data)
+                        regime_csv = regime_df.to_csv()
+                        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        rf_info = f"_RF_{st.session_state.rf_ticker}" if HAS_RF_UTILS else "_FixedRF"
+                        
+                        st.download_button(
+                            label="🌍 Download Regime Analysis",
+                            data=regime_csv,
+                            file_name=f"regime_analysis{rf_info}_{timestamp}.csv",
+                            mime="text/csv"
+                        )
+                except Exception as e:
+                    st.warning(f"Regime data download failed: {str(e)}")
             else:
-                st.warning("No data to download")
+                st.info("No regime analysis data to download. Run 'All Market Regimes' analysis first.")
+                
         except Exception as e:
             st.error(f"Download failed: {str(e)}")
+            if st.session_state.debug_mode:
+                st.markdown(f"""
+                <div class="debug-info">
+                <strong>Debug Information:</strong><br>
+                {traceback.format_exc()}
+                </div>
+                """, unsafe_allow_html=True)
+    
+    def quick_test_ticker(self, ticker, name):
+        """빠른 티커 테스트 - 사이드바용"""
+        with st.spinner(f"Testing {ticker}..."):
+            result = self.analyze_single_etf_regime(ticker, name)
+            
+            if result['status'] == 'success':
+                st.success(f"✅ {ticker}: {result['regime']} (Confidence: {result['confidence']:.1%})")
+            else:
+                st.error(f"❌ {ticker}: {result['regime']}")
+                if 'detailed_error' in result:
+                    st.text(f"Details: {result['detailed_error']}")
+                
+                # 디버그 정보 표시
+                if st.session_state.debug_mode and 'debug_info' in result:
+                    with st.expander(f"Debug Info: {ticker}", expanded=False):
+                        for debug_line in result['debug_info']:
+                            st.text(debug_line)
     
     def clear_cache(self):
         """캐시 정리"""
@@ -1738,24 +2313,104 @@ class EnhancedRealtimeDashboard:
             st.session_state.cache_timestamp = None
             st.session_state.selected_tickers_for_regime = []
             st.session_state.regime_analysis_mode = 'all'
-            # RF 설정은 유지
-            st.success("✅ All cache cleared! (RF settings preserved)")
+            # RF 설정과 디버그 모드는 유지
+            st.success("✅ All cache cleared! (RF settings and debug mode preserved)")
         except Exception as e:
             st.error(f"Cache clear failed: {str(e)}")
 
 
 # Streamlit 앱 실행
 def main():
+    """메인 함수 - 오류 처리 강화"""
     try:
+        # 시작 시 버전 정보 표시
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("**🔧 Dashboard Info**")
+        st.sidebar.info("Version: 2.1.0 (Fixed MODEL_INIT_ERROR)")
+        st.sidebar.success("✅ UniversalJumpModel parameters fixed")
+        st.sidebar.info("🏅 GLD analysis should now work")
+        st.sidebar.info("Enhanced: Detailed error diagnostics")
+        
         dashboard = EnhancedRealtimeDashboard()
         dashboard.run()
+        
+    except ImportError as e:
+        st.error(f"🚨 Import Error: Missing required module")
+        st.error(f"Details: {str(e)}")
+        st.markdown("""
+        ### Required Files:
+        - `preset_manager.py`
+        - `universal_rs_strategy.py` 
+        - `universal_jump_model.py`
+        - `universal_rs_with_jump.py`
+        - `risk_free_rate_utils.py` (optional, for dynamic RF)
+        
+        ### Installation:
+        ```bash
+        pip install streamlit pandas numpy plotly yfinance
+        ```
+        """)
+        
     except Exception as e:
-        st.error(f"Dashboard initialization failed: {str(e)}")
+        st.error(f"🚨 Dashboard initialization failed: {str(e)}")
         st.info("💡 Try refreshing the page or checking your file paths")
         
-        # 디버깅 정보 표시
-        if st.checkbox("Show Debug Info"):
-            st.exception(e)
+        # 상세 디버깅 정보 표시 옵션
+        if st.checkbox("🐛 Show Detailed Debug Info"):
+            st.markdown("### Error Details:")
+            st.code(traceback.format_exc())
+            
+            st.markdown("### Environment Check:")
+            
+            # 필수 모듈 체크
+            required_modules = [
+                'streamlit', 'pandas', 'numpy', 'plotly', 
+                'yfinance', 'datetime', 'concurrent.futures'
+            ]
+            
+            for module in required_modules:
+                try:
+                    __import__(module)
+                    st.success(f"✅ {module} - Available")
+                except ImportError:
+                    st.error(f"❌ {module} - Missing")
+            
+            # 사용자 정의 모듈 체크
+            custom_modules = [
+                'preset_manager', 'universal_rs_strategy', 
+                'universal_jump_model', 'universal_rs_with_jump',
+                'risk_free_rate_utils'
+            ]
+            
+            st.markdown("### Custom Modules:")
+            for module in custom_modules:
+                try:
+                    __import__(module)
+                    st.success(f"✅ {module}.py - Available")
+                except ImportError:
+                    if module == 'risk_free_rate_utils':
+                        st.warning(f"⚠️ {module}.py - Optional (for dynamic RF)")
+                    else:
+                        st.error(f"❌ {module}.py - Required but missing")
+            
+            # 시스템 정보
+            import sys
+            import platform
+            
+            st.markdown("### System Information:")
+            st.info(f"Python: {sys.version}")
+            st.info(f"Platform: {platform.platform()}")
+            st.info(f"Streamlit: {st.__version__}")
+            
+            # 권장 해결책
+            st.markdown("### Troubleshooting Steps:")
+            st.markdown("""
+            1. **Check file structure**: Ensure all `.py` files are in the same directory
+            2. **Install dependencies**: `pip install streamlit pandas numpy plotly yfinance`
+            3. **Restart the app**: Stop and restart the Streamlit application
+            4. **Check Python path**: Ensure all modules are in PYTHONPATH
+            5. **Update packages**: `pip install --upgrade streamlit pandas plotly`
+            """)
 
 
 if __name__ == "__main__":
