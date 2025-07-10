@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import time
+import yfinance as yf
 from preset_manager import PresetManager
 from universal_rs_strategy import UniversalRSStrategy
 from universal_jump_model import UniversalJumpModel
@@ -162,7 +163,7 @@ class StreamlinedRealtimeDashboard:
         st.title("🚀 Universal RS Strategy Dashboard - Dynamic RF Edition")
         st.markdown("### Real-time Market Monitoring & Signal Generation")
         
-        st.success("📊 **Streamlined Version**: 효율화된 대시보드로 더 빠른 분석!")
+        st.success("📊 **Enhanced Version**: 기존 수준의 오류 진단 기능 복원!")
         
         # Risk-Free Rate 상태 표시
         rf_status = "📊 동적" if HAS_RF_UTILS else "📌 고정"
@@ -205,9 +206,9 @@ class StreamlinedRealtimeDashboard:
         # 버전 정보
         st.sidebar.markdown("---")
         st.sidebar.markdown("**📊 Dashboard Info**")
-        st.sidebar.info("Version: 3.0.0 (Streamlined)")
-        st.sidebar.success("✅ GLD 특별 기능 제거")
-        st.sidebar.success("✅ 코드 효율화 완료")
+        st.sidebar.info("Version: 3.0.1 (Error Handling Restored)")
+        st.sidebar.success("✅ Enhanced error diagnostics")
+        st.sidebar.success("✅ Detailed failure analysis")
     
     def _configure_risk_free_rate(self):
         """Risk-Free Rate 설정"""
@@ -745,47 +746,131 @@ class StreamlinedRealtimeDashboard:
         return results
     
     def _analyze_single_ticker(self, ticker, name):
-        """단일 티커 분석"""
+        """단일 티커 분석 - 기존 코드 수준의 오류 처리 복원"""
         try:
-            jump_model = UniversalJumpModel(
-                benchmark_ticker=ticker,
-                benchmark_name=name,
-                training_cutoff_date=datetime(2024, 12, 31),
-                rf_ticker=st.session_state.rf_ticker,
-                default_rf_rate=st.session_state.default_rf_rate
-            )
-            
-            current_regime = jump_model.get_current_regime_with_training_cutoff()
-            
-            if current_regime:
+            # 1단계: 데이터 사전 검증 (기존 코드 로직 복원)
+            try:
+                ticker_obj = yf.Ticker(ticker)
+                hist = ticker_obj.history(period="5y", timeout=30)
+                
+                if hist.empty:
+                    return {
+                        'ticker': ticker, 'name': name, 'regime': 'NO_HISTORICAL_DATA',
+                        'confidence': 0.0, 'status': 'data_unavailable'
+                    }
+                
+                # 데이터 품질 검사
+                hist_clean = hist.dropna()
+                if len(hist_clean) < 300:
+                    return {
+                        'ticker': ticker, 'name': name, 'regime': 'INSUFFICIENT_DATA',
+                        'confidence': 0.0, 'status': 'insufficient_data'
+                    }
+                    
+            except Exception as e:
                 return {
+                    'ticker': ticker, 'name': name, 'regime': 'DATA_FETCH_ERROR',
+                    'confidence': 0.0, 'status': 'data_fetch_error',
+                    'error': str(e)
+                }
+            
+            # 2단계: JumpModel 초기화 (기존 파라미터 복원)
+            try:
+                jump_model = UniversalJumpModel(
+                    benchmark_ticker=ticker,
+                    benchmark_name=name,
+                    jump_penalty=50.0,  # 기존 코드 파라미터 복원
+                    use_paper_features_only=True,  # 기존 코드 파라미터 복원
+                    training_cutoff_date=datetime(2024, 12, 31),
+                    rf_ticker=st.session_state.rf_ticker,
+                    default_rf_rate=st.session_state.default_rf_rate
+                )
+                
+            except Exception as e:
+                return {
+                    'ticker': ticker, 'name': name, 'regime': 'MODEL_INIT_ERROR',
+                    'confidence': 0.0, 'status': 'model_init_error',
+                    'error': str(e)
+                }
+            
+            # 3단계: 체제 분석 실행
+            try:
+                current_regime = jump_model.get_current_regime_with_training_cutoff()
+                
+                if current_regime is None:
+                    return {
+                        'ticker': ticker, 'name': name, 'regime': 'NO_REGIME_DATA',
+                        'confidence': 0.0, 'status': 'no_regime_data'
+                    }
+                
+                if not isinstance(current_regime, dict):
+                    return {
+                        'ticker': ticker, 'name': name, 'regime': 'INVALID_REGIME_DATA',
+                        'confidence': 0.0, 'status': 'invalid_regime_data'
+                    }
+                
+                # 필수 키 확인
+                required_keys = ['regime', 'confidence', 'date']
+                missing_keys = [key for key in required_keys if key not in current_regime]
+                
+                if missing_keys:
+                    return {
+                        'ticker': ticker, 'name': name, 'regime': 'INCOMPLETE_REGIME_DATA',
+                        'confidence': 0.0, 'status': 'incomplete_regime_data',
+                        'missing_keys': missing_keys
+                    }
+                
+            except Exception as e:
+                return {
+                    'ticker': ticker, 'name': name, 'regime': 'REGIME_ANALYSIS_ERROR',
+                    'confidence': 0.0, 'status': 'analysis_error',
+                    'error': str(e)
+                }
+            
+            # 4단계: 결과 처리
+            try:
+                # 안전한 값 추출
+                regime = current_regime.get('regime', 'UNKNOWN')
+                confidence = current_regime.get('confidence', 0.0)
+                
+                # confidence 안전 변환
+                if isinstance(confidence, pd.Series):
+                    if len(confidence) > 0:
+                        confidence = float(confidence.iloc[-1])
+                    else:
+                        confidence = 0.0
+                elif not isinstance(confidence, (int, float)):
+                    confidence = 0.0
+                
+                # 신뢰도 범위 검증
+                confidence = max(0.0, min(1.0, confidence))
+                
+                result = {
                     'ticker': ticker,
                     'name': name,
-                    'regime': current_regime['regime'],
-                    'confidence': safe_get_value(current_regime['confidence'], 0.5),
+                    'regime': regime,
+                    'confidence': confidence,
                     'is_out_of_sample': current_regime.get('is_out_of_sample', False),
-                    'analysis_date': current_regime.get('date', datetime.now()).strftime('%Y-%m-%d'),
+                    'analysis_date': current_regime.get('date', datetime.now()).strftime('%Y-%m-%d') if hasattr(current_regime.get('date'), 'strftime') else str(current_regime.get('date', 'Unknown')),
                     'rf_ticker': current_regime.get('rf_ticker', st.session_state.rf_ticker),
                     'current_rf_rate': current_regime.get('current_rf_rate', st.session_state.default_rf_rate * 100),
                     'dynamic_rf_used': current_regime.get('dynamic_rf_used', False),
                     'status': 'success'
                 }
-            else:
+                
+                return result
+                
+            except Exception as e:
                 return {
-                    'ticker': ticker,
-                    'name': name,
-                    'regime': 'NO_DATA',
-                    'confidence': 0.0,
-                    'status': 'no_data'
+                    'ticker': ticker, 'name': name, 'regime': 'RESULTS_PROCESSING_ERROR',
+                    'confidence': 0.0, 'status': 'results_processing_error',
+                    'error': str(e)
                 }
                 
         except Exception as e:
             return {
-                'ticker': ticker,
-                'name': name,
-                'regime': 'ANALYSIS_ERROR',
-                'confidence': 0.0,
-                'status': 'error',
+                'ticker': ticker, 'name': name, 'regime': 'FATAL_ERROR',
+                'confidence': 0.0, 'status': 'fatal_error',
                 'error': str(e)
             }
     
