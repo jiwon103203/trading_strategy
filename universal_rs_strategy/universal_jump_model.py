@@ -271,114 +271,216 @@ class UniversalJumpModel:
             return pd.DataFrame()
     
     def _calculate_paper_features_only_robust(self, excess_returns, rf_data):
-        """논문 특징 계산 - 강화된 오류 처리"""
+        """논문 특징 계산 - EWM 차원 문제 해결"""
         try:
-            # 하방 수익률
+            print(f"    특징 계산 시작... (데이터: {len(excess_returns)}개)")
+            
+            # 하방 수익률 계산
             negative_excess_returns = excess_returns.where(excess_returns < 0, 0)
             
-            # Feature 1: Downside Deviation (halflife=10)
+            print(f"    하방 수익률 계산 완료")
+            
+            # Feature 1: Downside Deviation (halflife=10) - 차원 문제 해결
             try:
-                ewm_dd_var_10 = self._robust_ewm_calculation(
-                    (negative_excess_returns ** 2), 
-                    halflife=10, 
-                    min_periods=20
-                )
+                print(f"    Feature 1 계산 시작...")
+                
+                # 제곱 계산 (1차원 유지)
+                negative_squared = negative_excess_returns ** 2
+                print(f"    negative_squared shape: {negative_squared.shape if hasattr(negative_squared, 'shape') else 'Series'}")
+                
+                # EWM 계산
+                ewm_dd_var_10 = self._robust_ewm_calculation_fixed(negative_squared, halflife=10, min_periods=20)
                 
                 if ewm_dd_var_10 is None or ewm_dd_var_10.empty:
-                    print(f"❌ Downside deviation 계산 실패")
+                    print(f"    ❌ Feature 1 EWM 계산 실패")
                     return pd.DataFrame()
                 
+                print(f"    EWM 결과 shape: {ewm_dd_var_10.shape if hasattr(ewm_dd_var_10, 'shape') else 'Series'}")
+                
+                # 제곱근 계산 (연율화)
                 downside_deviation_10 = np.sqrt(ewm_dd_var_10.abs()) * np.sqrt(252)
+                print(f"    Feature 1 계산 완료")
                 
             except Exception as e:
-                print(f"❌ Feature 1 계산 오류: {e}")
+                print(f"    ❌ Feature 1 계산 오류: {e}")
+                print(f"    오류 상세: {type(e).__name__}")
                 return pd.DataFrame()
             
-            # Feature 2: Sortino Ratio (halflife=20)
+            # Feature 2: Sortino Ratio (halflife=20) - 차원 문제 해결
             try:
-                ewm_mean_20 = self._robust_ewm_calculation(excess_returns, halflife=20, min_periods=40) * 252
-                ewm_dd_var_20 = self._robust_ewm_calculation(
-                    (negative_excess_returns ** 2), 
-                    halflife=20, 
-                    min_periods=40
-                )
+                print(f"    Feature 2 계산 시작...")
                 
-                if ewm_mean_20 is None or ewm_dd_var_20 is None:
-                    print(f"❌ Sortino ratio 20 계산 실패")
+                # 평균 초과수익률 계산
+                ewm_mean_20 = self._robust_ewm_calculation_fixed(excess_returns, halflife=20, min_periods=40)
+                if ewm_mean_20 is None or ewm_mean_20.empty:
+                    print(f"    ❌ Feature 2 평균 계산 실패")
                     return pd.DataFrame()
                 
+                ewm_mean_20_annual = ewm_mean_20 * 252
+                
+                # 하방 분산 계산
+                ewm_dd_var_20 = self._robust_ewm_calculation_fixed(negative_squared, halflife=20, min_periods=40)
+                if ewm_dd_var_20 is None or ewm_dd_var_20.empty:
+                    print(f"    ❌ Feature 2 하방분산 계산 실패")
+                    return pd.DataFrame()
+                
+                # 하방 표준편차 계산
                 ewm_dd_20 = np.sqrt(ewm_dd_var_20.abs()) * np.sqrt(252)
+                
+                # Sortino ratio 계산 (0으로 나누기 방지)
                 denominator_20 = ewm_dd_20 + 1e-8
-                sortino_ratio_20 = ewm_mean_20 / denominator_20
+                sortino_ratio_20 = ewm_mean_20_annual / denominator_20
+                
+                print(f"    Feature 2 계산 완료")
                 
             except Exception as e:
-                print(f"❌ Feature 2 계산 오류: {e}")
+                print(f"    ❌ Feature 2 계산 오류: {e}")
                 return pd.DataFrame()
             
-            # Feature 3: Sortino Ratio (halflife=60)
+            # Feature 3: Sortino Ratio (halflife=60) - 차원 문제 해결
             try:
-                ewm_mean_60 = self._robust_ewm_calculation(excess_returns, halflife=60, min_periods=120) * 252
-                ewm_dd_var_60 = self._robust_ewm_calculation(
-                    (negative_excess_returns ** 2), 
-                    halflife=60, 
-                    min_periods=120
-                )
+                print(f"    Feature 3 계산 시작...")
                 
-                if ewm_mean_60 is None or ewm_dd_var_60 is None:
-                    print(f"❌ Sortino ratio 60 계산 실패")
+                # 평균 초과수익률 계산
+                ewm_mean_60 = self._robust_ewm_calculation_fixed(excess_returns, halflife=60, min_periods=120)
+                if ewm_mean_60 is None or ewm_mean_60.empty:
+                    print(f"    ❌ Feature 3 평균 계산 실패")
                     return pd.DataFrame()
                 
+                ewm_mean_60_annual = ewm_mean_60 * 252
+                
+                # 하방 분산 계산
+                ewm_dd_var_60 = self._robust_ewm_calculation_fixed(negative_squared, halflife=60, min_periods=120)
+                if ewm_dd_var_60 is None or ewm_dd_var_60.empty:
+                    print(f"    ❌ Feature 3 하방분산 계산 실패")
+                    return pd.DataFrame()
+                
+                # 하방 표준편차 계산
                 ewm_dd_60 = np.sqrt(ewm_dd_var_60.abs()) * np.sqrt(252)
+                
+                # Sortino ratio 계산 (0으로 나누기 방지)
                 denominator_60 = ewm_dd_60 + 1e-8
-                sortino_ratio_60 = ewm_mean_60 / denominator_60
+                sortino_ratio_60 = ewm_mean_60_annual / denominator_60
+                
+                print(f"    Feature 3 계산 완료")
                 
             except Exception as e:
-                print(f"❌ Feature 3 계산 오류: {e}")
+                print(f"    ❌ Feature 3 계산 오류: {e}")
                 return pd.DataFrame()
             
-            # DataFrame 생성
+            # DataFrame 생성 - 차원 검증 강화
             try:
-                features_df = pd.DataFrame({
-                    'downside_deviation_10': downside_deviation_10,
-                    'sortino_ratio_20': sortino_ratio_20,
-                    'sortino_ratio_60': sortino_ratio_60
-                }, index=excess_returns.index)
+                print(f"    DataFrame 생성 시작...")
                 
-                # 데이터 정리
+                # 각 특징의 차원 확인
+                print(f"    downside_deviation_10 type: {type(downside_deviation_10)}")
+                print(f"    sortino_ratio_20 type: {type(sortino_ratio_20)}")
+                print(f"    sortino_ratio_60 type: {type(sortino_ratio_60)}")
+                
+                # 인덱스 확인
+                common_index = excess_returns.index
+                print(f"    공통 인덱스 길이: {len(common_index)}")
+                
+                # Series 검증 및 정렬
+                dd_10_series = self._ensure_series_aligned(downside_deviation_10, common_index, 'downside_deviation_10')
+                sr_20_series = self._ensure_series_aligned(sortino_ratio_20, common_index, 'sortino_ratio_20')
+                sr_60_series = self._ensure_series_aligned(sortino_ratio_60, common_index, 'sortino_ratio_60')
+                
+                if dd_10_series is None or sr_20_series is None or sr_60_series is None:
+                    print(f"    ❌ Series 정렬 실패")
+                    return pd.DataFrame()
+                
+                # DataFrame 생성
+                features_df = pd.DataFrame({
+                    'downside_deviation_10': dd_10_series,
+                    'sortino_ratio_20': sr_20_series,
+                    'sortino_ratio_60': sr_60_series
+                }, index=common_index)
+                
+                print(f"    DataFrame 생성 완료: {features_df.shape}")
+                
+            except Exception as e:
+                print(f"    ❌ DataFrame 생성 오류: {e}")
+                print(f"    오류 상세: {type(e).__name__}")
+                return pd.DataFrame()
+            
+            # 데이터 정리
+            try:
+                print(f"    데이터 정리 시작...")
                 features_df = self._clean_features_dataframe(features_df)
                 
                 if features_df.empty:
-                    print(f"❌ 특징 데이터프레임이 비어있음")
+                    print(f"    ❌ 데이터 정리 후 빈 DataFrame")
                     return pd.DataFrame()
                 
-                print(f"✅ 논문 특징 계산 완료: {len(features_df)}개")
+                print(f"    ✅ 논문 특징 계산 완료: {len(features_df)}개")
                 return features_df
                 
             except Exception as e:
-                print(f"❌ 특징 데이터프레임 생성 오류: {e}")
+                print(f"    ❌ 데이터 정리 오류: {e}")
                 return pd.DataFrame()
                 
         except Exception as e:
-            print(f"❌ 논문 특징 계산 치명적 오류: {e}")
+            print(f"    ❌ 논문 특징 계산 치명적 오류: {e}")
             return pd.DataFrame()
-
-    def _robust_ewm_calculation(self, series, halflife, min_periods=None):
-        """강화된 EWM 계산"""
+    
+    def _robust_ewm_calculation_fixed(self, series, halflife, min_periods=None):
+        """EWM 계산 - 차원 문제 완전 해결"""
         try:
-            if series is None or len(series) == 0:
+            if series is None:
+                print(f"        EWM 입력 series가 None")
                 return pd.Series(dtype=float)
+            
+            # 입력 타입 확인
+            print(f"        EWM 입력 타입: {type(series)}")
+            
+            if hasattr(series, 'shape'):
+                print(f"        EWM 입력 shape: {series.shape}")
+                
+                # 2차원 배열이면 1차원으로 변환
+                if len(series.shape) > 1:
+                    print(f"        ⚠️ 2차원 배열 감지, 1차원으로 변환")
+                    if isinstance(series, pd.DataFrame):
+                        series = series.iloc[:, 0]  # 첫 번째 컬럼 사용
+                    elif isinstance(series, np.ndarray):
+                        series = pd.Series(series.flatten())
+                    else:
+                        print(f"        ❌ 알 수 없는 2차원 타입: {type(series)}")
+                        return pd.Series(dtype=float)
+            
+            # pandas Series인지 확인
+            if not isinstance(series, pd.Series):
+                print(f"        Series가 아닌 타입, 변환 시도: {type(series)}")
+                try:
+                    series = pd.Series(series)
+                except Exception as e:
+                    print(f"        ❌ Series 변환 실패: {e}")
+                    return pd.Series(dtype=float)
+            
+            if len(series) == 0:
+                print(f"        빈 Series")
+                return pd.Series(dtype=float)
+            
+            print(f"        EWM 계산 시작: 길이={len(series)}, halflife={halflife}")
             
             # 최소 기간 설정
             if min_periods is None:
                 min_periods = max(int(halflife * 2), 10)
             
             if len(series) < min_periods:
+                print(f"        데이터 부족: {len(series)} < {min_periods}")
                 return pd.Series(dtype=float, index=series.index)
             
             # 데이터 전처리
             clean_series = series.copy()
+            
+            # 무한대 제거
             clean_series = clean_series.replace([np.inf, -np.inf], np.nan)
+            
+            # NaN 처리
             clean_series = clean_series.fillna(method='ffill').fillna(method='bfill').fillna(0.0)
+            
+            print(f"        데이터 전처리 완료")
             
             # EWM 계산
             try:
@@ -388,21 +490,100 @@ class UniversalJumpModel:
                     min_periods=min_periods
                 ).mean()
                 
+                print(f"        EWM 계산 성공: {type(ewm_result)}")
+                
+                # 결과 검증
+                if hasattr(ewm_result, 'shape'):
+                    print(f"        EWM 결과 shape: {ewm_result.shape}")
+                    
+                    # 2차원 결과면 1차원으로 변환
+                    if len(ewm_result.shape) > 1:
+                        print(f"        ⚠️ EWM 결과가 2차원, 1차원으로 변환")
+                        if isinstance(ewm_result, pd.DataFrame):
+                            ewm_result = ewm_result.iloc[:, 0]
+                        else:
+                            ewm_result = pd.Series(ewm_result.flatten(), index=series.index)
+                
                 # 결과 정리
                 ewm_result = ewm_result.replace([np.inf, -np.inf], np.nan)
                 ewm_result = ewm_result.fillna(method='ffill').fillna(method='bfill').fillna(0.0)
                 
+                print(f"        EWM 계산 완료")
                 return ewm_result
                 
             except Exception as e:
-                print(f"EWM 계산 실패 (halflife={halflife}): {e}")
+                print(f"        EWM 계산 실패: {e}")
+                print(f"        오류 타입: {type(e).__name__}")
+                
                 # 실패시 rolling mean으로 대체
-                window = max(int(halflife * 2), 5)
-                return clean_series.rolling(window=window, min_periods=min_periods//2).mean().fillna(0.0)
+                try:
+                    print(f"        Rolling mean으로 대체 시도...")
+                    window = max(int(halflife * 2), 5)
+                    rolling_result = clean_series.rolling(window=window, min_periods=min_periods//2).mean()
+                    rolling_result = rolling_result.fillna(0.0)
+                    print(f"        Rolling mean 성공")
+                    return rolling_result
+                except Exception as e2:
+                    print(f"        Rolling mean도 실패: {e2}")
+                    return pd.Series(dtype=float, index=series.index)
             
         except Exception as e:
-            print(f"EWM 전처리 실패: {e}")
-            return pd.Series(dtype=float, index=series.index if series is not None else [])    
+            print(f"        EWM 전처리 치명적 실패: {e}")
+            if hasattr(series, 'index'):
+                return pd.Series(dtype=float, index=series.index)
+            else:
+                return pd.Series(dtype=float)
+    
+    def _ensure_series_aligned(self, data, target_index, feature_name):
+        """Series 정렬 및 차원 검증"""
+        try:
+            print(f"        {feature_name} 정렬 시작...")
+            
+            if data is None:
+                print(f"        {feature_name} 데이터가 None")
+                return None
+            
+            # 타입 확인
+            print(f"        {feature_name} 타입: {type(data)}")
+            
+            if hasattr(data, 'shape'):
+                print(f"        {feature_name} shape: {data.shape}")
+                
+                # 2차원이면 1차원으로 변환
+                if len(data.shape) > 1:
+                    print(f"        ⚠️ {feature_name} 2차원 데이터 감지")
+                    if isinstance(data, pd.DataFrame):
+                        data = data.iloc[:, 0]
+                    elif isinstance(data, np.ndarray):
+                        data = pd.Series(data.flatten())
+                    else:
+                        print(f"        ❌ {feature_name} 알 수 없는 2차원 타입")
+                        return None
+            
+            # Series로 변환
+            if not isinstance(data, pd.Series):
+                try:
+                    data = pd.Series(data)
+                except Exception as e:
+                    print(f"        ❌ {feature_name} Series 변환 실패: {e}")
+                    return None
+            
+            # 인덱스 정렬
+            try:
+                # 공통 인덱스로 정렬
+                aligned_data = data.reindex(target_index)
+                aligned_data = aligned_data.fillna(method='ffill').fillna(method='bfill').fillna(0.0)
+                
+                print(f"        {feature_name} 정렬 완료: {len(aligned_data)}개")
+                return aligned_data
+                
+            except Exception as e:
+                print(f"        ❌ {feature_name} 인덱스 정렬 실패: {e}")
+                return None
+            
+        except Exception as e:
+            print(f"        ❌ {feature_name} 정렬 치명적 실패: {e}")
+            return None  
 
     def _clean_features_dataframe(self, features_df):
         """특징 데이터프레임 정리"""
