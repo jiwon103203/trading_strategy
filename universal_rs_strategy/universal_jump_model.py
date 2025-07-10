@@ -190,125 +190,256 @@ class UniversalJumpModel:
             return None
     
     def calculate_features(self, price_data):
-        """
-        논문 기반 EWM 특징 계산 - 안정화된 버전
-        """
+        """특징 계산 - 범용적 오류 처리 강화"""
         try:
-            returns = price_data['Close'].pct_change().dropna()
-            
-            if len(returns) < self.min_data_length:
-                print(f"수익률 데이터 부족: {len(returns)} < {self.min_data_length}")
+            if price_data is None or price_data.empty:
+                print(f"❌ 가격 데이터가 없음")
                 return pd.DataFrame()
             
-            print(f"수익률 계산: {len(returns)}일")
+            # 1단계: 수익률 계산
+            try:
+                if 'Close' not in price_data.columns:
+                    print(f"❌ Close 컬럼이 없음")
+                    return pd.DataFrame()
+                
+                returns = price_data['Close'].pct_change().dropna()
+                
+                if len(returns) < self.min_data_length:
+                    print(f"❌ 수익률 데이터 부족: {len(returns)} < {self.min_data_length}")
+                    return pd.DataFrame()
+                
+                print(f"✅ 수익률 계산: {len(returns)}일")
+                
+            except Exception as e:
+                print(f"❌ 수익률 계산 오류: {e}")
+                return pd.DataFrame()
             
-            # Risk-free rate 처리 - 안정화된 버전
-            rf_data = None
-            if HAS_RF_UTILS and self.rf_manager:
-                try:
+            # 2단계: Risk-free rate 처리
+            try:
+                rf_data = None
+                if HAS_RF_UTILS and self.rf_manager:
                     start_date = returns.index[0]
                     end_date = returns.index[-1]
                     rf_data = self.rf_manager.download_risk_free_rate(start_date, end_date)
                     
                     if rf_data is not None and len(rf_data) > 0:
-                        print(f"Risk-free rate 데이터: {len(rf_data)}개")
+                        print(f"✅ Risk-free rate 데이터: {len(rf_data)}개")
                     else:
-                        print("Risk-free rate 데이터 없음 - 기본값 사용")
+                        print(f"⚠️ Risk-free rate 데이터 없음 - 기본값 사용")
                         rf_data = None
-                        
-                except Exception as e:
-                    print(f"Risk-free rate 다운로드 실패: {e} - 기본값 사용")
-                    rf_data = None
-            
-            # Daily risk-free rate 계산
-            if rf_data is not None:
-                try:
-                    daily_rf_rates = rf_data.reindex(returns.index, method='ffill').fillna(self.default_rf_rate)
-                    daily_rf_rates = daily_rf_rates / 252  # 연율을 일별로 변환
-                    print("동적 Risk-Free Rate 사용")
-                except Exception as e:
-                    print(f"RF 데이터 정렬 실패: {e} - 기본값 사용")
+                
+                # Daily risk-free rate 계산
+                if rf_data is not None:
+                    try:
+                        daily_rf_rates = rf_data.reindex(returns.index, method='ffill').fillna(self.default_rf_rate)
+                        daily_rf_rates = daily_rf_rates / 252
+                        print(f"✅ 동적 Risk-Free Rate 사용")
+                    except Exception as e:
+                        print(f"⚠️ RF 데이터 정렬 실패: {e} - 기본값 사용")
+                        daily_rf_rates = pd.Series(self.default_rf_rate / 252, index=returns.index)
+                else:
                     daily_rf_rates = pd.Series(self.default_rf_rate / 252, index=returns.index)
-            else:
-                daily_rf_rates = pd.Series(self.default_rf_rate / 252, index=returns.index)
-                print("고정 Risk-Free Rate 사용")
+                    print(f"✅ 고정 Risk-Free Rate 사용")
+                
+                # 초과수익률 계산
+                excess_returns = returns - daily_rf_rates
+                
+            except Exception as e:
+                print(f"❌ Risk-free rate 처리 오류: {e}")
+                excess_returns = returns - self.default_rf_rate / 252
             
-            # 초과수익률 계산
-            excess_returns = returns - daily_rf_rates
-            
-            if self.use_paper_features_only:
-                return self._calculate_paper_features_only(excess_returns, rf_data)
-            else:
-                return self._calculate_enhanced_features(excess_returns, returns, rf_data)
+            # 3단계: 특징 계산
+            try:
+                if self.use_paper_features_only:
+                    features_df = self._calculate_paper_features_only_robust(excess_returns, rf_data)
+                else:
+                    features_df = self._calculate_enhanced_features_robust(excess_returns, returns, rf_data)
+                
+                if features_df is None or features_df.empty:
+                    print(f"❌ 특징 계산 결과가 비어있음")
+                    return pd.DataFrame()
+                
+                print(f"✅ 특징 계산 완료: {len(features_df)}개")
+                return features_df
+                
+            except Exception as e:
+                print(f"❌ 특징 계산 오류: {e}")
+                return pd.DataFrame()
                 
         except Exception as e:
-            print(f"특징 계산 중 오류: {e}")
+            print(f"❌ 특징 계산 치명적 오류: {e}")
             return pd.DataFrame()
     
-    def _calculate_paper_features_only(self, excess_returns, rf_data):
-        """논문 Table 2의 정확한 3가지 특징만 계산 - 안정화된 버전"""
+    def _calculate_paper_features_only_robust(self, excess_returns, rf_data):
+        """논문 특징 계산 - 강화된 오류 처리"""
         try:
-            # 하방 수익률 (음수인 경우만)
+            # 하방 수익률
             negative_excess_returns = excess_returns.where(excess_returns < 0, 0)
             
-            # Feature 1: Downside Deviation (halflife=10) - 안전한 계산
-            ewm_dd_var_10 = safe_ewm_calculation((negative_excess_returns ** 2), halflife=10, min_periods=20)
-            downside_deviation_10 = np.sqrt(ewm_dd_var_10.abs()) * np.sqrt(252)  # abs() 추가
+            # Feature 1: Downside Deviation (halflife=10)
+            try:
+                ewm_dd_var_10 = self._robust_ewm_calculation(
+                    (negative_excess_returns ** 2), 
+                    halflife=10, 
+                    min_periods=20
+                )
+                
+                if ewm_dd_var_10 is None or ewm_dd_var_10.empty:
+                    print(f"❌ Downside deviation 계산 실패")
+                    return pd.DataFrame()
+                
+                downside_deviation_10 = np.sqrt(ewm_dd_var_10.abs()) * np.sqrt(252)
+                
+            except Exception as e:
+                print(f"❌ Feature 1 계산 오류: {e}")
+                return pd.DataFrame()
             
-            # Feature 2: Sortino Ratio (halflife=20) - 안전한 계산
-            ewm_mean_20 = safe_ewm_calculation(excess_returns, halflife=20, min_periods=40) * 252
-            ewm_dd_var_20 = safe_ewm_calculation((negative_excess_returns ** 2), halflife=20, min_periods=40)
-            ewm_dd_20 = np.sqrt(ewm_dd_var_20.abs()) * np.sqrt(252)  # abs() 추가
+            # Feature 2: Sortino Ratio (halflife=20)
+            try:
+                ewm_mean_20 = self._robust_ewm_calculation(excess_returns, halflife=20, min_periods=40) * 252
+                ewm_dd_var_20 = self._robust_ewm_calculation(
+                    (negative_excess_returns ** 2), 
+                    halflife=20, 
+                    min_periods=40
+                )
+                
+                if ewm_mean_20 is None or ewm_dd_var_20 is None:
+                    print(f"❌ Sortino ratio 20 계산 실패")
+                    return pd.DataFrame()
+                
+                ewm_dd_20 = np.sqrt(ewm_dd_var_20.abs()) * np.sqrt(252)
+                denominator_20 = ewm_dd_20 + 1e-8
+                sortino_ratio_20 = ewm_mean_20 / denominator_20
+                
+            except Exception as e:
+                print(f"❌ Feature 2 계산 오류: {e}")
+                return pd.DataFrame()
             
-            # 분모가 0에 가까운 경우 처리
-            denominator_20 = ewm_dd_20 + 1e-6  # 더 큰 epsilon 사용
-            sortino_ratio_20 = ewm_mean_20 / denominator_20
-            
-            # Feature 3: Sortino Ratio (halflife=60) - 안전한 계산
-            ewm_mean_60 = safe_ewm_calculation(excess_returns, halflife=60, min_periods=120) * 252
-            ewm_dd_var_60 = safe_ewm_calculation((negative_excess_returns ** 2), halflife=60, min_periods=120)
-            ewm_dd_60 = np.sqrt(ewm_dd_var_60.abs()) * np.sqrt(252)  # abs() 추가
-            
-            # 분모가 0에 가까운 경우 처리
-            denominator_60 = ewm_dd_60 + 1e-6  # 더 큰 epsilon 사용
-            sortino_ratio_60 = ewm_mean_60 / denominator_60
+            # Feature 3: Sortino Ratio (halflife=60)
+            try:
+                ewm_mean_60 = self._robust_ewm_calculation(excess_returns, halflife=60, min_periods=120) * 252
+                ewm_dd_var_60 = self._robust_ewm_calculation(
+                    (negative_excess_returns ** 2), 
+                    halflife=60, 
+                    min_periods=120
+                )
+                
+                if ewm_mean_60 is None or ewm_dd_var_60 is None:
+                    print(f"❌ Sortino ratio 60 계산 실패")
+                    return pd.DataFrame()
+                
+                ewm_dd_60 = np.sqrt(ewm_dd_var_60.abs()) * np.sqrt(252)
+                denominator_60 = ewm_dd_60 + 1e-8
+                sortino_ratio_60 = ewm_mean_60 / denominator_60
+                
+            except Exception as e:
+                print(f"❌ Feature 3 계산 오류: {e}")
+                return pd.DataFrame()
             
             # DataFrame 생성
-            features_df = pd.DataFrame({
-                'downside_deviation_10': downside_deviation_10,
-                'sortino_ratio_20': sortino_ratio_20,
-                'sortino_ratio_60': sortino_ratio_60
-            }, index=excess_returns.index)
+            try:
+                features_df = pd.DataFrame({
+                    'downside_deviation_10': downside_deviation_10,
+                    'sortino_ratio_20': sortino_ratio_20,
+                    'sortino_ratio_60': sortino_ratio_60
+                }, index=excess_returns.index)
+                
+                # 데이터 정리
+                features_df = self._clean_features_dataframe(features_df)
+                
+                if features_df.empty:
+                    print(f"❌ 특징 데이터프레임이 비어있음")
+                    return pd.DataFrame()
+                
+                print(f"✅ 논문 특징 계산 완료: {len(features_df)}개")
+                return features_df
+                
+            except Exception as e:
+                print(f"❌ 특징 데이터프레임 생성 오류: {e}")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            print(f"❌ 논문 특징 계산 치명적 오류: {e}")
+            return pd.DataFrame()
+
+    def _robust_ewm_calculation(self, series, halflife, min_periods=None):
+        """강화된 EWM 계산"""
+        try:
+            if series is None or len(series) == 0:
+                return pd.Series(dtype=float)
             
-            # 초기 불안정한 값들 제거 - 더 보수적으로
-            stable_start = max(120, len(features_df) // 4)  # 최소 120일 또는 전체의 1/4
+            # 최소 기간 설정
+            if min_periods is None:
+                min_periods = max(int(halflife * 2), 10)
+            
+            if len(series) < min_periods:
+                return pd.Series(dtype=float, index=series.index)
+            
+            # 데이터 전처리
+            clean_series = series.copy()
+            clean_series = clean_series.replace([np.inf, -np.inf], np.nan)
+            clean_series = clean_series.fillna(method='ffill').fillna(method='bfill').fillna(0.0)
+            
+            # EWM 계산
+            try:
+                ewm_result = clean_series.ewm(
+                    halflife=halflife, 
+                    adjust=False, 
+                    min_periods=min_periods
+                ).mean()
+                
+                # 결과 정리
+                ewm_result = ewm_result.replace([np.inf, -np.inf], np.nan)
+                ewm_result = ewm_result.fillna(method='ffill').fillna(method='bfill').fillna(0.0)
+                
+                return ewm_result
+                
+            except Exception as e:
+                print(f"EWM 계산 실패 (halflife={halflife}): {e}")
+                # 실패시 rolling mean으로 대체
+                window = max(int(halflife * 2), 5)
+                return clean_series.rolling(window=window, min_periods=min_periods//2).mean().fillna(0.0)
+            
+        except Exception as e:
+            print(f"EWM 전처리 실패: {e}")
+            return pd.Series(dtype=float, index=series.index if series is not None else [])    
+
+    def _clean_features_dataframe(self, features_df):
+        """특징 데이터프레임 정리"""
+        try:
+            if features_df is None or features_df.empty:
+                return pd.DataFrame()
+            
+            # 초기 불안정한 값들 제거
+            stable_start = max(120, len(features_df) // 4)
             if len(features_df) > stable_start:
                 features_df = features_df.iloc[stable_start:].copy()
             else:
-                print(f"경고: 안정화 후 데이터 부족 ({len(features_df)} <= {stable_start})")
-                return pd.DataFrame()
+                print(f"⚠️ 안정화 후 데이터 부족: {len(features_df)} <= {stable_start}")
+                return features_df  # 그대로 반환
             
             # 데이터 정리
             features_df = features_df.fillna(method='ffill').fillna(0)
             features_df = features_df.replace([np.inf, -np.inf], 0)
             
-            # 이상값 처리 (99% 분위수로 클리핑)
+            # 이상값 처리
             for col in features_df.columns:
-                q99 = features_df[col].quantile(0.99)
-                q01 = features_df[col].quantile(0.01)
-                features_df[col] = features_df[col].clip(lower=q01, upper=q99)
+                try:
+                    q99 = features_df[col].quantile(0.99)
+                    q01 = features_df[col].quantile(0.01)
+                    features_df[col] = features_df[col].clip(lower=q01, upper=q99)
+                except:
+                    continue
             
-            print(f"논문 정확한 EWM 특징 계산 완료: {len(features_df)}개 (3 features)")
-            
-            # 최종 데이터 품질 확인
-            if len(features_df) < 50:  # 최소 50일은 있어야 함
-                print(f"경고: 최종 특징 데이터가 너무 적습니다 ({len(features_df)})")
+            # 최종 유효성 검사
+            if len(features_df) < 50:
+                print(f"⚠️ 최종 특징 데이터가 부족: {len(features_df)}")
                 return pd.DataFrame()
             
             return features_df
             
         except Exception as e:
-            print(f"논문 특징 계산 오류: {e}")
+            print(f"특징 데이터프레임 정리 실패: {e}")
             return pd.DataFrame()
     
     def _calculate_enhanced_features(self, excess_returns, returns, rf_data):
@@ -668,125 +799,284 @@ class UniversalJumpModel:
         except Exception as e:
             print(f"체제 예측 중 오류: {e}")
             return 'BULL', 0.5
+
+    def _safe_confidence_conversion(self, confidence):
+        """안전한 신뢰도 변환"""
+        try:
+            if confidence is None:
+                return 0.5
+            
+            if isinstance(confidence, pd.Series):
+                if len(confidence) > 0:
+                    # Series의 마지막 유효값 사용
+                    valid_values = confidence.dropna()
+                    if len(valid_values) > 0:
+                        conf_val = valid_values.iloc[-1]
+                        return max(0.0, min(1.0, float(conf_val)))
+                    else:
+                        return 0.5
+                else:
+                    return 0.5
+            
+            elif isinstance(confidence, (int, float)):
+                if np.isfinite(confidence):
+                    return max(0.0, min(1.0, float(confidence)))
+                else:
+                    return 0.5
+            
+            else:
+                # 기타 타입은 float 변환 시도
+                conf_val = float(confidence)
+                return max(0.0, min(1.0, conf_val))
+                
+        except Exception as e:
+            print(f"신뢰도 변환 실패: {e}")
+            return 0.5
+    
+    def _safe_features_conversion(self, features):
+        """안전한 특징 변환"""
+        try:
+            if features is None:
+                return {}
+            
+            if isinstance(features, pd.Series):
+                result = {}
+                for key, value in features.items():
+                    try:
+                        if pd.isna(value):
+                            result[key] = 0.0
+                        else:
+                            result[key] = float(value)
+                    except:
+                        result[key] = 0.0
+                return result
+            
+            elif isinstance(features, dict):
+                result = {}
+                for key, value in features.items():
+                    try:
+                        if pd.isna(value):
+                            result[key] = 0.0
+                        else:
+                            result[key] = float(value)
+                    except:
+                        result[key] = 0.0
+                return result
+            
+            else:
+                return {}
+                
+        except Exception as e:
+            print(f"특징 변환 실패: {e}")
+            return {}
     
     def train_model_with_cutoff(self, start_date=None, end_date=None):
-        """특정 기간의 데이터로만 모델 학습 - 안정화된 버전"""
+        """특정 기간의 데이터로만 모델 학습 - 범용적 오류 처리 강화"""
         if end_date is None:
             end_date = self.training_cutoff_date
         
         if start_date is None:
             start_date = end_date - timedelta(days=365*20)
         
-        print(f"\nEWM 모델 학습: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
+        print(f"모델 학습: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
         
         try:
-            # 학습용 데이터 다운로드 (EWM 안정화를 위해 더 많은 데이터 필요)
-            extended_start = start_date - timedelta(days=200)  # 더 많은 과거 데이터
+            # 1단계: 학습용 데이터 다운로드
+            extended_start = start_date - timedelta(days=200)
             
-            price_data = self.download_benchmark_data(extended_start, end_date)
-            
-            if price_data is None or price_data.empty:
-                print(f"{self.benchmark_name} 학습 데이터를 가져올 수 없습니다.")
+            try:
+                price_data = self.download_benchmark_data(extended_start, end_date)
+                
+                if price_data is None or price_data.empty:
+                    print(f"❌ {self.benchmark_name} 학습 데이터 다운로드 실패")
+                    return False
+                
+                print(f"✅ 학습 데이터: {len(price_data)}일")
+                
+            except Exception as e:
+                print(f"❌ 학습 데이터 다운로드 오류: {e}")
                 return False
             
-            # 데이터 충분성 검사
+            # 2단계: 데이터 충분성 검사
             if len(price_data) < self.min_data_length:
-                print(f"{self.benchmark_name} 학습 데이터 부족: {len(price_data)} < {self.min_data_length}")
+                print(f"❌ {self.benchmark_name} 학습 데이터 부족: {len(price_data)} < {self.min_data_length}")
                 return False
             
-            # EWM 특징 계산
-            features_df = self.calculate_features(price_data)
-            
-            if features_df.empty:
-                print(f"{self.benchmark_name} EWM 특징 계산 실패")
+            # 3단계: 특징 계산
+            try:
+                print(f"학습용 특징 계산 중...")
+                features_df = self.calculate_features(price_data)
+                
+                if features_df is None or features_df.empty:
+                    print(f"❌ {self.benchmark_name} 학습용 특징 계산 실패")
+                    return False
+                
+                print(f"✅ 학습용 특징: {len(features_df)}개")
+                
+            except Exception as e:
+                print(f"❌ 학습용 특징 계산 오류: {e}")
                 return False
             
-            # 학습 기간으로 제한
-            training_features = features_df[start_date:end_date]
-            
-            if len(training_features) < 50:  # 최소 50일
-                print(f"학습 데이터 부족: {len(training_features)} < 50")
+            # 4단계: 학습 기간으로 제한
+            try:
+                training_features = features_df[start_date:end_date]
+                
+                if len(training_features) < 50:
+                    print(f"❌ 학습 기간 데이터 부족: {len(training_features)} < 50")
+                    return False
+                
+                print(f"✅ 학습 기간 특징: {len(training_features)}개")
+                
+            except Exception as e:
+                print(f"❌ 학습 기간 제한 오류: {e}")
                 return False
             
-            print(f"EWM 학습 특징 수: {len(training_features)}")
-            
-            # 모델 학습
-            result = self.fit_jump_model(training_features)
-            return result is not None
-            
+            # 5단계: 모델 학습
+            try:
+                print(f"모델 학습 시작...")
+                result = self.fit_jump_model(training_features)
+                
+                if result is None:
+                    print(f"❌ 모델 학습 실패")
+                    return False
+                
+                print(f"✅ 모델 학습 완료")
+                return True
+                
+            except Exception as e:
+                print(f"❌ 모델 학습 오류: {e}")
+                return False
+                
         except Exception as e:
-            print(f"EWM 모델 학습 중 예외: {e}")
+            print(f"❌ 모델 학습 치명적 오류: {e}")
             return False
     
     def get_current_regime_with_training_cutoff(self):
-        """학습 마감일까지만 학습하고 현재 체제 예측 - 안정화된 버전"""
+        """학습 마감일까지만 학습하고 현재 체제 예측 - 범용적 오류 처리 강화"""
         try:
+            # 1단계: 모델 학습 상태 확인
             if not self.is_trained:
+                print(f"모델 학습 시작: {self.benchmark_name}")
                 success = self.train_model_with_cutoff()
                 if not success:
-                    print(f"{self.benchmark_name} 모델 학습 실패")
+                    print(f"❌ {self.benchmark_name} 모델 학습 실패")
                     return None
             
-            # 현재 시점까지의 데이터 가져오기
+            # 2단계: 현재 시점까지의 데이터 가져오기
             current_date = datetime.now()
-            inference_start = self.training_cutoff_date - timedelta(days=200)  # 더 많은 과거 데이터
+            inference_start = self.training_cutoff_date - timedelta(days=200)
             
-            print(f"\nEWM 추론: {inference_start.strftime('%Y-%m-%d')} ~ {current_date.strftime('%Y-%m-%d')}")
+            print(f"추론 데이터 다운로드: {inference_start.strftime('%Y-%m-%d')} ~ {current_date.strftime('%Y-%m-%d')}")
             
-            price_data = self.download_benchmark_data(inference_start, current_date)
-            
-            if price_data is None or price_data.empty:
-                print(f"{self.benchmark_name} 추론 데이터를 가져올 수 없습니다.")
+            try:
+                price_data = self.download_benchmark_data(inference_start, current_date)
+                
+                if price_data is None or price_data.empty:
+                    print(f"❌ {self.benchmark_name} 추론 데이터 다운로드 실패")
+                    return None
+                
+                print(f"✅ 추론 데이터: {len(price_data)}일")
+                
+            except Exception as e:
+                print(f"❌ 데이터 다운로드 오류: {e}")
                 return None
             
-            # EWM 특징 계산
-            features_df = self.calculate_features(price_data)
-            
-            if features_df.empty:
-                print(f"{self.benchmark_name} EWM 추론 특징 계산 실패")
+            # 3단계: 특징 계산
+            try:
+                print(f"특징 계산 시작...")
+                features_df = self.calculate_features(price_data)
+                
+                if features_df is None or features_df.empty:
+                    print(f"❌ {self.benchmark_name} 특징 계산 실패 - 빈 결과")
+                    return None
+                
+                print(f"✅ 특징 계산 완료: {len(features_df)}개")
+                
+            except Exception as e:
+                print(f"❌ 특징 계산 오류: {e}")
                 return None
             
-            # 최신 특징으로 예측
-            latest_features = features_df.iloc[-1]
-            current_regime, confidence = self.predict_regime(latest_features)
+            # 4단계: 최신 특징 추출 및 검증
+            try:
+                if len(features_df) == 0:
+                    print(f"❌ 특징 데이터가 비어있음")
+                    return None
+                
+                latest_features = features_df.iloc[-1]
+                latest_date = features_df.index[-1]
+                
+                # 특징 값 검증
+                if latest_features.isna().all():
+                    print(f"❌ 최신 특징이 모두 NaN")
+                    return None
+                
+                print(f"✅ 최신 특징 추출: {latest_date.strftime('%Y-%m-%d')}")
+                
+            except Exception as e:
+                print(f"❌ 최신 특징 추출 오류: {e}")
+                return None
             
-            latest_date = features_df.index[-1]
-            is_out_of_sample = latest_date > self.training_cutoff_date
+            # 5단계: 체제 예측 (핵심 부분)
+            try:
+                print(f"체제 예측 시작...")
+                current_regime, confidence = self.predict_regime(latest_features)
+                
+                if current_regime is None:
+                    print(f"❌ 체제 예측 실패 - None 반환")
+                    return None
+                
+                print(f"✅ 체제 예측 완료: {current_regime}")
+                
+            except Exception as e:
+                print(f"❌ 체제 예측 오류: {e}")
+                return None
             
-            # 분석 정보
-            analysis_info = {
-                'regime': current_regime,
-                'confidence': safe_float_conversion(confidence, 0.5),
-                'date': latest_date,
-                'features': latest_features.to_dict(),
-                'is_out_of_sample': is_out_of_sample,
-                'training_cutoff': self.training_cutoff_date.strftime('%Y-%m-%d'),
-                'feature_type': "논문 정확한 3특징" if self.use_paper_features_only else "논문 기반 + 추가",
-                'ewm_applied': True,
-                'rf_ticker': self.rf_ticker,
-                'dynamic_rf_used': HAS_RF_UTILS and self.rf_manager is not None
-            }
-            
-            # Risk-free rate 정보
-            if HAS_RF_UTILS and self.rf_manager:
+            # 6단계: 결과 구성 (안전한 변환)
+            try:
+                is_out_of_sample = latest_date > self.training_cutoff_date
+                
+                # 안전한 confidence 변환
+                safe_confidence = self._safe_confidence_conversion(confidence)
+                
+                # 분석 정보 구성
+                analysis_info = {
+                    'regime': str(current_regime),
+                    'confidence': safe_confidence,
+                    'date': latest_date,
+                    'features': self._safe_features_conversion(latest_features),
+                    'is_out_of_sample': bool(is_out_of_sample),
+                    'training_cutoff': self.training_cutoff_date.strftime('%Y-%m-%d'),
+                    'feature_type': "논문 정확한 3특징" if self.use_paper_features_only else "논문 기반 + 추가",
+                    'ewm_applied': True,
+                    'rf_ticker': self.rf_ticker,
+                    'dynamic_rf_used': HAS_RF_UTILS and self.rf_manager is not None
+                }
+                
+                # Risk-free rate 정보 추가
                 try:
-                    rf_stats = self.rf_manager.get_risk_free_rate_stats(
-                        latest_date - timedelta(days=30), latest_date
-                    )
-                    analysis_info['current_rf_rate'] = safe_float_conversion(rf_stats['end_rate'], self.default_rf_rate * 100)
-                    analysis_info['avg_rf_rate_30d'] = safe_float_conversion(rf_stats['mean_rate'], self.default_rf_rate * 100)
-                except:
+                    if HAS_RF_UTILS and self.rf_manager:
+                        rf_stats = self.rf_manager.get_risk_free_rate_stats(
+                            latest_date - timedelta(days=30), latest_date
+                        )
+                        analysis_info['current_rf_rate'] = safe_float_conversion(rf_stats['end_rate'], self.default_rf_rate * 100)
+                        analysis_info['avg_rf_rate_30d'] = safe_float_conversion(rf_stats['mean_rate'], self.default_rf_rate * 100)
+                    else:
+                        analysis_info['current_rf_rate'] = self.default_rf_rate * 100
+                        analysis_info['avg_rf_rate_30d'] = self.default_rf_rate * 100
+                except Exception as e:
+                    print(f"⚠️ RF 정보 추가 실패: {e}")
                     analysis_info['current_rf_rate'] = self.default_rf_rate * 100
                     analysis_info['avg_rf_rate_30d'] = self.default_rf_rate * 100
-            else:
-                analysis_info['current_rf_rate'] = self.default_rf_rate * 100
-                analysis_info['avg_rf_rate_30d'] = self.default_rf_rate * 100
-            
-            print(f"EWM 체제 분석 완료: {current_regime} (신뢰도: {confidence:.2%})")
-            return analysis_info
-            
+                
+                print(f"✅ 체제 분석 완료: {current_regime} (신뢰도: {safe_confidence:.2%})")
+                return analysis_info
+                
+            except Exception as e:
+                print(f"❌ 결과 구성 오류: {e}")
+                return None
+                
         except Exception as e:
-            print(f"EWM 체제 분석 중 예외: {e}")
+            print(f"❌ 체제 분석 치명적 오류: {e}")
             return None
     
     def get_current_regime(self):
