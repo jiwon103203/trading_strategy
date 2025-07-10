@@ -751,19 +751,15 @@ class EnhancedRealtimeDashboard:
                     st.info("💡 Check your internet connection or try a simpler analysis")
     
     def analyze_single_etf_regime(self, ticker, name):
-        """단일 ETF의 시장 체제 분석 - EWM 대응 강화된 버전"""
+        """단일 ETF의 시장 체제 분석 - 범용적 오류 처리 강화"""
         debug_info = []
-        detailed_error = None
         
         try:
-            debug_info.append(f"[{datetime.now().strftime('%H:%M:%S')}] Starting EWM analysis for {ticker} ({name})")
+            debug_info.append(f"[{datetime.now().strftime('%H:%M:%S')}] Starting analysis for {ticker} ({name})")
             
-            # 데이터 확인 및 전처리 단계 - EWM을 위해 더 많은 데이터 필요
-            debug_info.append(f"[Step 1] Checking data for EWM calculation: {ticker}")
-            
+            # 1단계: 데이터 확인
             try:
                 ticker_obj = yf.Ticker(ticker)
-                # EWM을 위해 5년 데이터로 확장
                 hist = ticker_obj.history(period="5y", timeout=30)
                 
                 if hist.empty:
@@ -771,213 +767,149 @@ class EnhancedRealtimeDashboard:
                     return {
                         'ticker': ticker, 'name': name, 'regime': 'NO_HISTORICAL_DATA',
                         'confidence': 0.0, 'status': 'data_unavailable',
-                        'debug_info': debug_info,
-                        'detailed_error': f"No historical data available for {ticker}"
+                        'debug_info': debug_info
                     }
                 
-                # 데이터 품질 검사 및 정리
-                debug_info.append(f"[Step 1.1] Raw data: {len(hist)} days")
+                # 데이터 품질 검사
+                hist_clean = hist.dropna()
+                debug_info.append(f"[Step 1] Data quality: {len(hist_clean)} clean days from {len(hist)} total")
                 
-                # NaN 값 확인
-                nan_counts = hist.isnull().sum()
-                if nan_counts.any():
-                    debug_info.append(f"[Step 1.1] Found NaN values: {dict(nan_counts)}")
-                    hist_clean = hist.dropna()
-                    debug_info.append(f"[Step 1.1] After cleaning: {len(hist_clean)} days")
-                else:
-                    hist_clean = hist
-                    debug_info.append(f"[Step 1.1] Data clean: no NaN values")
-                
-                # EWM을 위한 충분한 데이터 확인 (최소 300일)
                 if len(hist_clean) < 300:
-                    debug_info.append(f"[Step 1] FAILED: Insufficient data for EWM ({len(hist_clean)} days, need 300+)")
+                    debug_info.append(f"[Step 1] FAILED: Insufficient data ({len(hist_clean)} < 300)")
                     return {
-                        'ticker': ticker, 'name': name, 'regime': 'INSUFFICIENT_DATA_FOR_EWM',
+                        'ticker': ticker, 'name': name, 'regime': 'INSUFFICIENT_DATA',
                         'confidence': 0.0, 'status': 'insufficient_data',
-                        'debug_info': debug_info,
-                        'detailed_error': f"Insufficient data for EWM: {len(hist_clean)} days (need 300+)"
+                        'debug_info': debug_info
                     }
                 
-                debug_info.append(f"[Step 1] SUCCESS: EWM data validation passed - {len(hist_clean)} clean days")
+                debug_info.append(f"[Step 1] SUCCESS: Data validation passed")
                 
             except Exception as e:
                 debug_info.append(f"[Step 1] ERROR: Data preprocessing failed - {str(e)}")
                 return {
                     'ticker': ticker, 'name': name, 'regime': 'DATA_FETCH_ERROR',
                     'confidence': 0.0, 'status': 'data_fetch_error',
-                    'debug_info': debug_info,
-                    'detailed_error': f"Data preprocessing failed: {str(e)}"
+                    'debug_info': debug_info
                 }
             
-            # JumpModel 초기화 단계 - EWM 친화적 파라미터
-            debug_info.append(f"[Step 2] Initializing EWM JumpModel for {ticker}")
-            
+            # 2단계: JumpModel 초기화
             try:
-                # EWM 친화적인 파라미터로 시작
+                debug_info.append(f"[Step 2] Initializing JumpModel for {ticker}")
+                
                 jump_model = UniversalJumpModel(
                     benchmark_ticker=ticker,
                     benchmark_name=name,
-                    jump_penalty=30.0,  # 더 관대한 페널티
-                    use_paper_features_only=True,  # 논문의 3가지 특징만 사용
+                    jump_penalty=50.0,
+                    use_paper_features_only=True,
                     training_cutoff_date=datetime(2024, 12, 31),
                     rf_ticker=st.session_state.rf_ticker,
                     default_rf_rate=st.session_state.default_rf_rate
                 )
-                debug_info.append(f"[Step 2] SUCCESS: EWM JumpModel initialized")
+                
+                debug_info.append(f"[Step 2] SUCCESS: JumpModel initialized")
                 
             except Exception as e:
-                debug_info.append(f"[Step 2] ERROR: First initialization failed - {str(e)}")
-                
-                # 더 단순한 파라미터로 재시도
-                try:
-                    debug_info.append(f"[Step 2] Retrying with minimal EWM parameters...")
-                    jump_model = UniversalJumpModel(
-                        benchmark_ticker=ticker,
-                        benchmark_name=name,
-                        jump_penalty=50.0,
-                        use_paper_features_only=True,
-                        training_cutoff_date=datetime(2024, 12, 31)
-                    )
-                    debug_info.append(f"[Step 2] SUCCESS: Minimal EWM initialization succeeded")
-                    
-                except Exception as e2:
-                    debug_info.append(f"[Step 2] FAILED: All EWM initialization attempts failed")
-                    return {
-                        'ticker': ticker, 'name': name, 'regime': 'EWM_MODEL_INIT_ERROR',
-                        'confidence': 0.0, 'status': 'model_init_error',
-                        'debug_info': debug_info,
-                        'detailed_error': f"EWM JumpModel initialization failed: {str(e2)}"
-                    }
+                debug_info.append(f"[Step 2] ERROR: JumpModel initialization failed - {str(e)}")
+                return {
+                    'ticker': ticker, 'name': name, 'regime': 'MODEL_INIT_ERROR',
+                    'confidence': 0.0, 'status': 'model_init_error',
+                    'debug_info': debug_info
+                }
             
-            # 체제 분석 단계 (EWM 특별 처리)
-            debug_info.append(f"[Step 3] Analyzing EWM regime for {ticker}")
-            
+            # 3단계: 체제 분석 실행
             try:
-                # EWM 체제 분석 실행
+                debug_info.append(f"[Step 3] Running regime analysis for {ticker}")
+                
                 current_regime = jump_model.get_current_regime_with_training_cutoff()
                 
-                if current_regime and isinstance(current_regime, dict):
-                    # 결과 유효성 검사
-                    required_keys = ['regime', 'confidence', 'date']
-                    missing_keys = [key for key in required_keys if key not in current_regime]
-                    
-                    if missing_keys:
-                        debug_info.append(f"[Step 3] WARNING: Missing keys in EWM result: {missing_keys}")
-                    
-                    # confidence 값 검증 및 변환
-                    confidence = current_regime.get('confidence', 0)
-                    
-                    # Series 변환 문제 특별 처리
-                    if isinstance(confidence, pd.Series):
-                        debug_info.append(f"[Step 3] WARNING: Confidence is Series, converting to float")
-                        try:
-                            confidence = float(confidence.iloc[-1]) if len(confidence) > 0 else 0.0
-                        except Exception as conv_error:
-                            debug_info.append(f"[Step 3] ERROR: Series conversion failed: {conv_error}")
-                            confidence = 0.0
-                    elif not isinstance(confidence, (int, float)):
-                        debug_info.append(f"[Step 3] WARNING: Confidence type {type(confidence)}, converting")
-                        try:
-                            confidence = float(confidence)
-                        except Exception as conv_error:
-                            debug_info.append(f"[Step 3] ERROR: Confidence conversion failed: {conv_error}")
-                            confidence = 0.0
-                    
-                    # 신뢰도 범위 검증
-                    if not (0 <= confidence <= 1):
-                        debug_info.append(f"[Step 3] WARNING: Confidence {confidence} out of range, clamping")
-                        confidence = max(0, min(1, confidence))
-                    
-                    debug_info.append(f"[Step 3] SUCCESS: EWM regime analysis completed")
-                    debug_info.append(f"[Result] EWM Regime: {current_regime['regime']}, Confidence: {confidence:.3f}")
-                    
-                    result = {
-                        'ticker': ticker,
-                        'name': name,
-                        'regime': current_regime['regime'],
-                        'confidence': confidence,
-                        'is_out_of_sample': current_regime.get('is_out_of_sample', False),
-                        'analysis_date': current_regime['date'].strftime('%Y-%m-%d') if hasattr(current_regime['date'], 'strftime') else str(current_regime['date']),
-                        'rf_ticker': current_regime.get('rf_ticker', st.session_state.rf_ticker),
-                        'current_rf_rate': current_regime.get('current_rf_rate', st.session_state.default_rf_rate * 100),
-                        'dynamic_rf_used': current_regime.get('dynamic_rf_used', False),
-                        'ewm_applied': current_regime.get('ewm_applied', True),
-                        'feature_type': current_regime.get('feature_type', 'EWM Features'),
-                        'status': 'success',
+                if current_regime is None:
+                    debug_info.append(f"[Step 3] FAILED: get_current_regime_with_training_cutoff returned None")
+                    return {
+                        'ticker': ticker, 'name': name, 'regime': 'NO_REGIME_DATA',
+                        'confidence': 0.0, 'status': 'no_regime_data',
                         'debug_info': debug_info
                     }
-                    
-                    # 디버그 모드에서 즉시 결과 표시
-                    if st.session_state.debug_mode:
-                        st.success(f"✅ {ticker}: {current_regime['regime']} (Confidence: {confidence:.1%}) [EWM]")
-                    
-                    return result
-                    
-                else:
-                    debug_info.append(f"[Step 3] FAILED: Invalid or no EWM regime data returned")
-                    debug_info.append(f"[Analysis] Result type: {type(current_regime)}, Content: {current_regime}")
-                    
+                
+                if not isinstance(current_regime, dict):
+                    debug_info.append(f"[Step 3] FAILED: Invalid regime data type: {type(current_regime)}")
                     return {
-                        'ticker': ticker, 'name': name, 'regime': 'NO_EWM_REGIME_DATA',
-                        'confidence': 0.0, 'status': 'no_regime_data',
-                        'debug_info': debug_info,
-                        'detailed_error': "EWM model returned invalid or empty regime data"
+                        'ticker': ticker, 'name': name, 'regime': 'INVALID_REGIME_DATA',
+                        'confidence': 0.0, 'status': 'invalid_regime_data',
+                        'debug_info': debug_info
                     }
-                    
+                
+                # 필수 키 확인
+                required_keys = ['regime', 'confidence', 'date']
+                missing_keys = [key for key in required_keys if key not in current_regime]
+                
+                if missing_keys:
+                    debug_info.append(f"[Step 3] WARNING: Missing keys in regime result: {missing_keys}")
+                
+                debug_info.append(f"[Step 3] SUCCESS: Regime analysis completed")
+                
             except Exception as e:
-                error_str = str(e)
-                debug_info.append(f"[Step 3] ERROR: EWM regime analysis failed - {error_str}")
-                
-                # EWM 특별 오류 분류
-                if "ewm" in error_str.lower() or "halflife" in error_str.lower():
-                    debug_info.append(f"[Step 3] DIAGNOSIS: EWM calculation error detected")
-                    detailed_error = f"EWM calculation failed: {error_str}"
-                    regime_status = 'EWM_CALCULATION_ERROR'
-                elif "cannot convert the series to" in error_str.lower():
-                    debug_info.append(f"[Step 3] DIAGNOSIS: Pandas Series conversion error in EWM")
-                    detailed_error = f"EWM data type conversion error: {error_str}"
-                    regime_status = 'EWM_SERIES_CONVERSION_ERROR'
-                elif "float" in error_str.lower() and "series" in error_str.lower():
-                    debug_info.append(f"[Step 3] DIAGNOSIS: EWM Series to float conversion error")
-                    detailed_error = f"EWM Series to float conversion failed: {error_str}"
-                    regime_status = 'EWM_SERIES_CONVERSION_ERROR'
-                elif "insufficient" in error_str.lower() or "empty" in error_str.lower():
-                    regime_status = 'EWM_INSUFFICIENT_DATA'
-                    detailed_error = f"EWM insufficient data: {error_str}"
-                else:
-                    # 기존 오류 분류
-                    if "404" in error_str or "not found" in error_str.lower():
-                        regime_status = 'TICKER_NOT_FOUND'
-                    elif "timeout" in error_str.lower() or "connection" in error_str.lower():
-                        regime_status = 'CONNECTION_ERROR'
-                    elif "permission" in error_str.lower() or "forbidden" in error_str.lower():
-                        regime_status = 'ACCESS_DENIED'
-                    elif "index" in error_str.lower() or "key" in error_str.lower():
-                        regime_status = 'DATA_FORMAT_ERROR'
-                    else:
-                        regime_status = 'EWM_ANALYSIS_ERROR'
-                    
-                    detailed_error = f"EWM regime analysis error: {error_str}"
-                
+                debug_info.append(f"[Step 3] ERROR: Regime analysis failed - {str(e)}")
                 return {
-                    'ticker': ticker, 'name': name, 'regime': regime_status,
+                    'ticker': ticker, 'name': name, 'regime': 'ANALYSIS_ERROR',
                     'confidence': 0.0, 'status': 'analysis_error',
                     'debug_info': debug_info,
-                    'detailed_error': detailed_error,
-                    'raw_error': error_str
+                    'detailed_error': str(e)
+                }
+            
+            # 4단계: 결과 처리
+            try:
+                debug_info.append(f"[Step 4] Processing results for {ticker}")
+                
+                # 안전한 값 추출
+                regime = current_regime.get('regime', 'UNKNOWN')
+                confidence = current_regime.get('confidence', 0.0)
+                
+                # confidence 안전 변환
+                if isinstance(confidence, pd.Series):
+                    if len(confidence) > 0:
+                        confidence = float(confidence.iloc[-1])
+                    else:
+                        confidence = 0.0
+                elif not isinstance(confidence, (int, float)):
+                    confidence = 0.0
+                
+                # 신뢰도 범위 검증
+                confidence = max(0.0, min(1.0, confidence))
+                
+                result = {
+                    'ticker': ticker,
+                    'name': name,
+                    'regime': regime,
+                    'confidence': confidence,
+                    'is_out_of_sample': current_regime.get('is_out_of_sample', False),
+                    'analysis_date': current_regime.get('date', datetime.now()).strftime('%Y-%m-%d') if hasattr(current_regime.get('date'), 'strftime') else str(current_regime.get('date', 'Unknown')),
+                    'rf_ticker': current_regime.get('rf_ticker', st.session_state.rf_ticker),
+                    'current_rf_rate': current_regime.get('current_rf_rate', st.session_state.default_rf_rate * 100),
+                    'dynamic_rf_used': current_regime.get('dynamic_rf_used', False),
+                    'status': 'success',
+                    'debug_info': debug_info
                 }
                 
-        except Exception as e:
-            debug_info.append(f"[FATAL] Unexpected EWM error: {str(e)}")
-            detailed_error = f"Unexpected EWM error: {str(e)}"
+                debug_info.append(f"[Step 4] SUCCESS: Results processed - {regime} (Confidence: {confidence:.1%})")
+                
+                return result
+                
+            except Exception as e:
+                debug_info.append(f"[Step 4] ERROR: Results processing failed - {str(e)}")
+                return {
+                    'ticker': ticker, 'name': name, 'regime': 'RESULTS_PROCESSING_ERROR',
+                    'confidence': 0.0, 'status': 'results_processing_error',
+                    'debug_info': debug_info,
+                    'detailed_error': str(e)
+                }
             
+        except Exception as e:
+            debug_info.append(f"[FATAL] Unexpected error: {str(e)}")
             return {
-                'ticker': ticker, 'name': name, 'regime': 'EWM_FATAL_ERROR',
+                'ticker': ticker, 'name': name, 'regime': 'FATAL_ERROR',
                 'confidence': 0.0, 'status': 'fatal_error',
                 'debug_info': debug_info,
-                'detailed_error': detailed_error,
-                'raw_error': str(e),
-                'traceback': traceback.format_exc()
+                'detailed_error': str(e)
             }
     
     def analyze_all_etf_regimes(self, selected_tickers_only=None):
