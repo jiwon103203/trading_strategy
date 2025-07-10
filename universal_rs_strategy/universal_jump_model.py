@@ -8,16 +8,25 @@ from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
+# Risk-free rate 유틸리티 import
+try:
+    from risk_free_rate_utils import RiskFreeRateManager
+    HAS_RF_UTILS = True
+except ImportError:
+    print("Warning: risk_free_rate_utils.py가 없습니다. 기본 risk-free rate (2%) 사용")
+    HAS_RF_UTILS = False
+
 class UniversalJumpModel:
     """
-    범용 Jump Model with Training Cutoff Support
+    범용 Jump Model with Training Cutoff Support + 동적 Risk-Free Rate 지원
     다양한 지수에 적용 가능한 시장 체제(Bull/Bear) 감지
     2024년까지 학습, 2025년은 추론용
+    동적 risk-free rate를 사용한 위험조정 수익률 계산
     """
     
     def __init__(self, benchmark_ticker, benchmark_name="Market", 
                  n_states=2, lookback_window=20, jump_penalty=50.0,
-                 training_cutoff_date=None):
+                 training_cutoff_date=None, rf_ticker='^IRX', default_rf_rate=0.02):
         """
         Parameters:
         - benchmark_ticker: 벤치마크 지수 티커 (예: '^GSPC', '069500.KS', 'URTH')
@@ -26,17 +35,28 @@ class UniversalJumpModel:
         - lookback_window: 특징 계산을 위한 lookback 기간
         - jump_penalty: 체제 전환에 대한 페널티
         - training_cutoff_date: 학습 데이터 마지막 날짜 (None이면 전체 사용)
+        - rf_ticker: Risk-free rate 티커 (기본: ^IRX)
+        - default_rf_rate: 기본 risk-free rate (기본: 2%)
         """
         self.benchmark_ticker = benchmark_ticker
         self.benchmark_name = benchmark_name
         self.n_states = n_states
         self.lookback_window = lookback_window
         self.jump_penalty = jump_penalty
-        self.training_cutoff_date = training_cutoff_date
+        self.rf_ticker = rf_ticker
+        self.default_rf_rate = default_rf_rate
         
         # 기본 학습 마감일을 2024년 12월 31일로 설정
         if training_cutoff_date is None:
             self.training_cutoff_date = datetime(2024, 12, 31)
+        else:
+            self.training_cutoff_date = training_cutoff_date
+        
+        # Risk-free rate 관리자 초기화
+        if HAS_RF_UTILS:
+            self.rf_manager = RiskFreeRateManager(rf_ticker, default_rf_rate)
+        else:
+            self.rf_manager = None
         
         # 모델 파라미터
         self.cluster_centers = None
@@ -46,6 +66,7 @@ class UniversalJumpModel:
         self.is_trained = False
         
         print(f"Jump Model 초기화: 학습 마감일 = {self.training_cutoff_date.strftime('%Y-%m-%d')}")
+        print(f"Risk-Free Rate: {self.rf_ticker} (기본값: {self.default_rf_rate*100:.1f}%)")
     
     def download_benchmark_data(self, start_date, end_date):
         """벤치마크 데이터 다운로드"""
@@ -64,33 +85,60 @@ class UniversalJumpModel:
     
     def calculate_features(self, price_data):
         """
-        Jump Model을 위한 특징 계산
+        Jump Model을 위한 특징 계산 (동적 Risk-Free Rate 지원)
         """
         features_list = []
         
         # 일일 수익률
         returns = price_data['Close'].pct_change().dropna()
         
+        # Risk-free rate 다운로드 (특징 계산 기간에 맞춰)
+        rf_data = None
+        if HAS_RF_UTILS and self.rf_manager:
+            try:
+                start_date = returns.index[0]
+                end_date = returns.index[-1]
+                rf_data = self.rf_manager.download_risk_free_rate(start_date, end_date)
+                print(f"Risk-free rate 데이터 사용: {len(rf_data)}개")
+            except Exception as e:
+                print(f"Risk-free rate 다운로드 실패: {e}")
+                rf_data = None
+        
         # Rolling window로 특징 계산
         for i in range(self.lookback_window, len(returns)):
             window_returns = returns.iloc[i-self.lookback_window:i]
+            window_dates = returns.index[i-self.lookback_window:i]
             
-            # 1. 평균 수익률
-            mean_return = float(window_returns.mean())
+            # 해당 기간의 risk-free rate
+            if rf_data is not None:
+                try:
+                    window_rf = rf_data.reindex(window_dates, method='ffill').fillna(self.default_rf_rate)
+                    daily_rf = window_rf / 252  # 일일 risk-free rate
+                    excess_returns = window_returns - daily_rf
+                    avg_rf_rate = window_rf.mean()
+                except:
+                    excess_returns = window_returns - (self.default_rf_rate / 252)
+                    avg_rf_rate = self.default_rf_rate
+            else:
+                excess_returns = window_returns - (self.default_rf_rate / 252)
+                avg_rf_rate = self.default_rf_rate
+            
+            # 1. 평균 초과 수익률 (위험조정)
+            mean_excess_return = float(excess_returns.mean())
             
             # 2. 실현 변동성 (Realized Volatility) - 명시적으로 float로 변환
             realized_vol = float(window_returns.std()) * np.sqrt(252)
             
-            # 3. 하방 변동성 (Downside Volatility)
-            downside_returns = window_returns[window_returns < 0]
-            if len(downside_returns) > 0:
-                downside_vol = float(downside_returns.std()) * np.sqrt(252)
+            # 3. 하방 변동성 (Downside Volatility) - 초과수익률 기준
+            downside_excess = excess_returns[excess_returns < 0]
+            if len(downside_excess) > 0:
+                downside_vol = float(downside_excess.std()) * np.sqrt(252)
             else:
                 downside_vol = 0.0
             
-            # 4. 왜도 (Skewness)
+            # 4. 왜도 (Skewness) - 초과수익률 기준
             try:
-                skewness = float(window_returns.skew())
+                skewness = float(excess_returns.skew())
                 if pd.isna(skewness):
                     skewness = 0.0
             except:
@@ -105,8 +153,8 @@ class UniversalJumpModel:
             except:
                 max_drawdown = 0.0
             
-            # 6. 상승/하락 일수 비율
-            up_days_ratio = float((window_returns > 0).sum()) / len(window_returns)
+            # 6. 상승/하락 일수 비율 (초과수익률 기준)
+            up_days_ratio = float((excess_returns > 0).sum()) / len(excess_returns)
             
             # 7. 변동성 비율 (Volatility Ratio) - 수정된 부분
             if realized_vol > 0:
@@ -114,21 +162,34 @@ class UniversalJumpModel:
             else:
                 vol_ratio = 1.0
             
+            # 8. Sharpe-like 비율 (위험조정 성과)
+            if realized_vol > 0:
+                risk_adjusted_return = mean_excess_return * 252 / realized_vol
+            else:
+                risk_adjusted_return = 0.0
+            
+            # 9. 현재 risk-free rate 수준
+            current_rf_level = float(avg_rf_rate)
+            
             features_list.append({
                 'date': returns.index[i],
-                'mean_return': mean_return,
+                'mean_excess_return': mean_excess_return,
                 'realized_vol': realized_vol,
                 'downside_vol': downside_vol,
                 'skewness': skewness,
                 'max_drawdown': max_drawdown,
                 'up_days_ratio': up_days_ratio,
-                'vol_ratio': vol_ratio
+                'vol_ratio': vol_ratio,
+                'risk_adjusted_return': risk_adjusted_return,
+                'rf_level': current_rf_level
             })
         
         features_df = pd.DataFrame(features_list).set_index('date')
         
         # NaN 값 처리
         features_df = features_df.fillna(0)
+        
+        print(f"특징 계산 완료: {len(features_df)}개 (동적 RF 적용: {rf_data is not None})")
         
         return features_df
     
@@ -195,7 +256,7 @@ class UniversalJumpModel:
         return states
     
     def analyze_regimes(self, features_df, states):
-        """체제별 특성 분석 및 Bull/Bear 레이블링"""
+        """체제별 특성 분석 및 Bull/Bear 레이블링 (동적 RF 고려)"""
         regime_stats = {}
         
         for state in range(self.n_states):
@@ -205,33 +266,37 @@ class UniversalJumpModel:
             if len(state_features) > 0:
                 regime_stats[state] = {
                     'count': len(state_features),
-                    'avg_return': float(state_features['mean_return'].mean()),
+                    'avg_excess_return': float(state_features['mean_excess_return'].mean()),
                     'avg_volatility': float(state_features['realized_vol'].mean()),
                     'avg_downside_vol': float(state_features['downside_vol'].mean()),
                     'avg_drawdown': float(state_features['max_drawdown'].mean()),
                     'avg_up_days': float(state_features['up_days_ratio'].mean()),
-                    'avg_vol_ratio': float(state_features['vol_ratio'].mean())
+                    'avg_vol_ratio': float(state_features['vol_ratio'].mean()),
+                    'avg_risk_adjusted': float(state_features['risk_adjusted_return'].mean()),
+                    'avg_rf_level': float(state_features['rf_level'].mean())
                 }
             else:
                 regime_stats[state] = {
                     'count': 0,
-                    'avg_return': 0.0,
+                    'avg_excess_return': 0.0,
                     'avg_volatility': 0.0,
                     'avg_downside_vol': 0.0,
                     'avg_drawdown': 0.0,
                     'avg_up_days': 0.0,
-                    'avg_vol_ratio': 1.0
+                    'avg_vol_ratio': 1.0,
+                    'avg_risk_adjusted': 0.0,
+                    'avg_rf_level': self.default_rf_rate
                 }
         
-        # Bear 상태 식별 (점수 기반)
+        # Bear 상태 식별 (위험조정 점수 기반)
         state_scores = {}
         for state in range(self.n_states):
-            # Bear 점수: 높은 변동성, 낮은 수익률, 높은 하방 변동성
+            # Bear 점수: 낮은 위험조정 수익률, 높은 하방 변동성, 낮은 초과수익률
             bear_score = (
-                regime_stats[state]['avg_volatility'] * 2 +
-                regime_stats[state]['avg_downside_vol'] * 2 +
-                abs(regime_stats[state]['avg_drawdown']) * 3 -
-                regime_stats[state]['avg_return'] * 100 -
+                regime_stats[state]['avg_downside_vol'] * 3 +
+                abs(regime_stats[state]['avg_drawdown']) * 4 -
+                regime_stats[state]['avg_excess_return'] * 1000 -  # 초과수익률이 중요
+                regime_stats[state]['avg_risk_adjusted'] * 2 -
                 regime_stats[state]['avg_up_days'] * 2
             )
             state_scores[state] = bear_score
@@ -247,18 +312,23 @@ class UniversalJumpModel:
             else:
                 self.state_mapping[state] = 'BULL'
         
-        # 통계 출력
+        # 통계 출력 (동적 RF 정보 포함)
         print(f"\n=== {self.benchmark_name} 체제별 특성 (학습기간: ~{self.training_cutoff_date.strftime('%Y-%m-%d')}) ===")
+        rf_info = f"동적 RF ({self.rf_ticker})" if HAS_RF_UTILS and self.rf_manager else f"고정 RF ({self.default_rf_rate*100:.1f}%)"
+        print(f"Risk-Free Rate: {rf_info}")
+        
         for state, stats in regime_stats.items():
             regime_type = self.state_mapping[state]
             if stats['count'] > 0:
                 print(f"\n{regime_type} 체제 (State {state}):")
                 print(f"  - 기간 비율: {stats['count'] / len(features_df) * 100:.1f}%")
-                print(f"  - 평균 수익률: {stats['avg_return']*252*100:.2f}%")
+                print(f"  - 평균 초과수익률: {stats['avg_excess_return']*252*100:.2f}%")
+                print(f"  - 평균 위험조정 수익률: {stats['avg_risk_adjusted']:.3f}")
                 print(f"  - 평균 변동성: {stats['avg_volatility']*100:.1f}%")
                 print(f"  - 평균 하방 변동성: {stats['avg_downside_vol']*100:.1f}%")
                 print(f"  - 평균 최대 낙폭: {stats['avg_drawdown']*100:.1f}%")
                 print(f"  - 평균 상승일 비율: {stats['avg_up_days']*100:.1f}%")
+                print(f"  - 평균 RF 수준: {stats['avg_rf_level']*100:.3f}%")
         
         return regime_stats
     
@@ -317,7 +387,7 @@ class UniversalJumpModel:
             print(f"{self.benchmark_name} 학습 데이터를 가져올 수 없습니다.")
             return False
         
-        # 특징 계산
+        # 특징 계산 (동적 RF 포함)
         features_df = self.calculate_features(price_data)
         
         if features_df.empty:
@@ -362,7 +432,7 @@ class UniversalJumpModel:
             print(f"{self.benchmark_name} 추론 데이터를 가져올 수 없습니다.")
             return None
         
-        # 특징 계산
+        # 특징 계산 (동적 RF 포함)
         features_df = self.calculate_features(price_data)
         
         if features_df.empty:
@@ -377,17 +447,37 @@ class UniversalJumpModel:
         latest_date = features_df.index[-1]
         is_out_of_sample = latest_date > self.training_cutoff_date
         
-        return {
+        # 추가 분석 정보
+        analysis_info = {
             'regime': current_regime,
             'confidence': confidence,
             'date': latest_date,
             'features': latest_features.to_dict(),
             'is_out_of_sample': is_out_of_sample,
-            'training_cutoff': self.training_cutoff_date.strftime('%Y-%m-%d')
+            'training_cutoff': self.training_cutoff_date.strftime('%Y-%m-%d'),
+            'rf_ticker': self.rf_ticker,
+            'dynamic_rf_used': HAS_RF_UTILS and self.rf_manager is not None
         }
+        
+        # Risk-free rate 정보 추가
+        if HAS_RF_UTILS and self.rf_manager:
+            try:
+                rf_stats = self.rf_manager.get_risk_free_rate_stats(
+                    latest_date - timedelta(days=30), latest_date
+                )
+                analysis_info['current_rf_rate'] = rf_stats['end_rate']
+                analysis_info['avg_rf_rate_30d'] = rf_stats['mean_rate']
+            except:
+                analysis_info['current_rf_rate'] = self.default_rf_rate * 100
+                analysis_info['avg_rf_rate_30d'] = self.default_rf_rate * 100
+        else:
+            analysis_info['current_rf_rate'] = self.default_rf_rate * 100
+            analysis_info['avg_rf_rate_30d'] = self.default_rf_rate * 100
+        
+        return analysis_info
     
     def get_regime_history(self, start_date, end_date):
-        """과거 체제 이력 계산"""
+        """과거 체제 이력 계산 (동적 RF 지원)"""
         # 데이터 다운로드
         price_data = self.download_benchmark_data(
             start_date - timedelta(days=self.lookback_window * 2),
@@ -398,7 +488,7 @@ class UniversalJumpModel:
             print(f"{self.benchmark_name} 데이터를 가져올 수 없습니다.")
             return None
         
-        # 특징 계산
+        # 특징 계산 (동적 RF 포함)
         features_df = self.calculate_features(price_data)
         
         if features_df.empty:
@@ -421,7 +511,7 @@ class UniversalJumpModel:
         return self.get_current_regime_with_training_cutoff()
     
     def get_regime_statistics(self, start_date, end_date):
-        """체제별 상세 통계"""
+        """체제별 상세 통계 (동적 RF 정보 포함)"""
         regime_history = self.get_regime_history(start_date, end_date)
         
         if regime_history is None or regime_history.empty:
@@ -454,33 +544,109 @@ class UniversalJumpModel:
                 'transitions': len([d for d in regime_durations if d['regime'] == regime])
             }
         
+        # Risk-free rate 통계 추가
+        if HAS_RF_UTILS and self.rf_manager:
+            try:
+                rf_stats = self.rf_manager.get_risk_free_rate_stats(start_date, end_date)
+                stats['risk_free_rate'] = {
+                    'ticker': self.rf_ticker,
+                    'avg_rate': rf_stats['mean_rate'],
+                    'min_rate': rf_stats['min_rate'],
+                    'max_rate': rf_stats['max_rate'],
+                    'std_rate': rf_stats['std_rate'],
+                    'dynamic_used': True
+                }
+            except:
+                stats['risk_free_rate'] = {
+                    'ticker': self.rf_ticker,
+                    'avg_rate': self.default_rf_rate * 100,
+                    'dynamic_used': False
+                }
+        else:
+            stats['risk_free_rate'] = {
+                'ticker': 'Fixed',
+                'avg_rate': self.default_rf_rate * 100,
+                'dynamic_used': False
+            }
+        
         return stats
+
+
+# 편의 함수들
+def create_jump_model_with_dynamic_rf(benchmark_ticker, benchmark_name, rf_ticker='^IRX', **kwargs):
+    """동적 Risk-Free Rate를 사용하는 Jump Model 생성 편의 함수"""
+    return UniversalJumpModel(
+        benchmark_ticker=benchmark_ticker,
+        benchmark_name=benchmark_name,
+        rf_ticker=rf_ticker,
+        **kwargs
+    )
+
+def analyze_multiple_markets_with_dynamic_rf(markets, rf_ticker='^IRX'):
+    """여러 시장의 체제를 동적 Risk-Free Rate로 분석"""
+    results = {}
+    
+    print(f"\n=== 다중 시장 분석 (동적 RF: {rf_ticker}) ===")
+    
+    for ticker, name in markets:
+        try:
+            jump_model = UniversalJumpModel(
+                benchmark_ticker=ticker,
+                benchmark_name=name,
+                rf_ticker=rf_ticker,
+                training_cutoff_date=datetime(2024, 12, 31)
+            )
+            
+            current = jump_model.get_current_regime_with_training_cutoff()
+            
+            if current:
+                results[name] = current
+                
+                oos_status = "🔮 Out-of-Sample" if current['is_out_of_sample'] else "📚 In-Sample"
+                rf_status = "📊 Dynamic" if current['dynamic_rf_used'] else "📌 Fixed"
+                
+                print(f"\n{name}:")
+                print(f"  체제: {current['regime']} (신뢰도: {current['confidence']:.2%})")
+                print(f"  상태: {oos_status}")
+                print(f"  RF: {rf_status} ({current['current_rf_rate']:.3f}%)")
+                print(f"  날짜: {current['date'].strftime('%Y-%m-%d')}")
+            else:
+                print(f"\n{name}: 분석 실패")
+                
+        except Exception as e:
+            print(f"\n{name}: 오류 - {e}")
+    
+    return results
 
 
 # 사용 예시
 if __name__ == "__main__":
-    # S&P 500에 대한 Jump Model (2024년까지 학습)
+    # S&P 500에 대한 Jump Model (2024년까지 학습, 동적 RF 사용)
     sp500_jump = UniversalJumpModel(
         benchmark_ticker='^GSPC',
         benchmark_name='S&P 500',
         jump_penalty=50.0,
-        training_cutoff_date=datetime(2024, 12, 31)
+        training_cutoff_date=datetime(2024, 12, 31),
+        rf_ticker='^IRX'  # 미국 3개월물 금리
     )
     
-    # 현재 체제 확인 (2024년까지 학습, 2025년은 추론)
+    # 현재 체제 확인 (2024년까지 학습, 2025년은 추론, 동적 RF 사용)
     current = sp500_jump.get_current_regime_with_training_cutoff()
     if current:
         print(f"\nS&P 500 현재 체제: {current['regime']} (신뢰도: {current['confidence']:.2%})")
         print(f"분석 날짜: {current['date'].strftime('%Y-%m-%d')}")
         print(f"Out-of-Sample 예측: {current['is_out_of_sample']}")
         print(f"학습 마감일: {current['training_cutoff']}")
+        print(f"Risk-Free Rate: {current['rf_ticker']} (현재: {current['current_rf_rate']:.3f}%)")
+        print(f"동적 RF 사용: {current['dynamic_rf_used']}")
     
-    # KOSPI에 대한 Jump Model
+    # KOSPI에 대한 Jump Model (동적 RF 사용)
     kospi_jump = UniversalJumpModel(
         benchmark_ticker='069500.KS',
         benchmark_name='KOSPI 200',
         jump_penalty=50.0,
-        training_cutoff_date=datetime(2024, 12, 31)
+        training_cutoff_date=datetime(2024, 12, 31),
+        rf_ticker='^IRX'  # 미국 RF 사용 (또는 한국 RF 티커 사용 가능)
     )
     
     # 현재 체제 확인
@@ -490,3 +656,20 @@ if __name__ == "__main__":
         print(f"분석 날짜: {current_kospi['date'].strftime('%Y-%m-%d')}")
         print(f"Out-of-Sample 예측: {current_kospi['is_out_of_sample']}")
         print(f"학습 마감일: {current_kospi['training_cutoff']}")
+        print(f"Risk-Free Rate: {current_kospi['rf_ticker']} (현재: {current_kospi['current_rf_rate']:.3f}%)")
+        print(f"동적 RF 사용: {current_kospi['dynamic_rf_used']}")
+    
+    # 다중 시장 분석
+    markets = [
+        ('^GSPC', 'S&P 500'),
+        ('^DJI', 'Dow Jones'),
+        ('^IXIC', 'NASDAQ'),
+        ('069500.KS', 'KOSPI 200'),
+        ('URTH', 'MSCI World'),
+        ('EEM', 'Emerging Markets')
+    ]
+    
+    multi_results = analyze_multiple_markets_with_dynamic_rf(markets, '^IRX')
+    
+    print(f"\n=== 동적 Risk-Free Rate Jump Model 테스트 완료 ===")
+    print(f"총 {len(multi_results)}개 시장 분석 완료")
