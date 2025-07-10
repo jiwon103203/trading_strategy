@@ -151,6 +151,7 @@ class StreamlinedRealtimeDashboard:
             'regime_analysis_mode': 'all',
             'rf_ticker': '^IRX',
             'default_rf_rate': 0.02,
+            'use_dynamic_rf': True,  # 기본값: Dynamic RF 사용
             'debug_mode': False
         }
         
@@ -163,11 +164,11 @@ class StreamlinedRealtimeDashboard:
         st.title("🚀 Universal RS Strategy Dashboard - Dynamic RF Edition")
         st.markdown("### Real-time Market Monitoring & Signal Generation")
         
-        st.success("📊 **Enhanced Version**: 기존 수준의 오류 진단 기능 복원!")
+        st.success("📊 **RF Mode Selection**: Choose between Dynamic (^IRX) or Fixed Rate!")
         
         # Risk-Free Rate 상태 표시
-        rf_status = "📊 동적" if HAS_RF_UTILS else "📌 고정"
-        st.markdown(f"**🏦 Risk-Free Rate**: {st.session_state.rf_ticker} ({rf_status}) | **🎯 Training**: 2005-2024 | **🔮 Inference**: 2025")
+        rf_status = "📊 Dynamic" if (HAS_RF_UTILS and st.session_state.use_dynamic_rf) else "📌 Fixed"
+        st.markdown(f"**🏦 Risk-Free Rate**: ^IRX ({rf_status}) | **🎯 Training**: 2005-2024 | **🔮 Inference**: 2025")
         
         # 사이드바 및 메인 컨텐츠
         self.create_sidebar()
@@ -206,48 +207,54 @@ class StreamlinedRealtimeDashboard:
         # 버전 정보
         st.sidebar.markdown("---")
         st.sidebar.markdown("**📊 Dashboard Info**")
-        st.sidebar.info("Version: 3.0.1 (Error Handling Restored)")
-        st.sidebar.success("✅ Enhanced error diagnostics")
-        st.sidebar.success("✅ Detailed failure analysis")
+        st.sidebar.info("Version: 3.1.0 (RF Mode Selection)")
+        st.sidebar.success("✅ Dynamic/Fixed RF selection")
+        st.sidebar.success("✅ ^IRX only (simplified)")
     
     def _configure_risk_free_rate(self):
         """Risk-Free Rate 설정"""
         st.sidebar.subheader("🏦 Risk-Free Rate Settings")
         
-        if HAS_RF_UTILS:
-            rf_options = {
-                '^IRX': '미국 3개월물 국채',
-                '^TNX': '미국 10년물 국채',
-                '^FVX': '미국 5년물 국채'
-            }
-            
-            selected_rf = st.sidebar.selectbox(
-                "Risk-Free Rate Ticker",
-                options=list(rf_options.keys()),
-                index=list(rf_options.keys()).index(st.session_state.rf_ticker),
-                format_func=lambda x: f"{x} - {rf_options[x]}"
-            )
-            
-            if selected_rf != st.session_state.rf_ticker:
-                st.session_state.rf_ticker = selected_rf
-                st.sidebar.success(f"RF 티커가 {selected_rf}로 변경되었습니다.")
-            
-            # RF 테스트
-            if st.sidebar.button("🔍 RF 테스트"):
-                self._test_risk_free_rate()
+        # Dynamic vs Fixed 선택
+        rf_mode = st.sidebar.radio(
+            "Risk-Free Rate Mode",
+            ["Dynamic (^IRX)", "Fixed Rate"],
+            index=0 if st.session_state.get('use_dynamic_rf', True) else 1,
+            help="Dynamic: Uses real-time 3-month Treasury rate. Fixed: Uses static rate."
+        )
+        
+        use_dynamic_rf = rf_mode == "Dynamic (^IRX)"
+        st.session_state.use_dynamic_rf = use_dynamic_rf
+        st.session_state.rf_ticker = '^IRX'  # 항상 ^IRX 고정
+        
+        if use_dynamic_rf:
+            if HAS_RF_UTILS:
+                st.sidebar.success("📊 Using Dynamic RF (^IRX)")
+                
+                # RF 테스트
+                if st.sidebar.button("🔍 Test Dynamic RF"):
+                    self._test_risk_free_rate()
+            else:
+                st.sidebar.error("❌ Dynamic RF not available")
+                st.sidebar.info("risk_free_rate_utils.py required")
+                # 강제로 Fixed 모드로 변경
+                st.session_state.use_dynamic_rf = False
         else:
+            # Fixed Rate 설정
             default_rf_pct = st.sidebar.number_input(
-                "Default RF Rate (%)",
+                "Fixed RF Rate (%)",
                 min_value=0.0,
                 max_value=10.0,
                 value=st.session_state.default_rf_rate * 100,
-                step=0.1
+                step=0.1,
+                help="Fixed risk-free rate for all calculations"
             )
             st.session_state.default_rf_rate = default_rf_pct / 100
+            st.sidebar.info(f"📌 Using Fixed RF: {default_rf_pct:.1f}%")
     
     def _test_risk_free_rate(self):
         """Risk-Free Rate 테스트"""
-        with st.spinner("RF 데이터 확인 중..."):
+        with st.spinner("Testing ^IRX data..."):
             try:
                 rf_manager = RiskFreeRateManager(st.session_state.rf_ticker, st.session_state.default_rf_rate)
                 end_date = datetime.now()
@@ -257,13 +264,13 @@ class StreamlinedRealtimeDashboard:
                 if rf_data is not None and not rf_data.empty:
                     current_rate = rf_data.iloc[-1] * 100
                     avg_rate = rf_data.mean() * 100
-                    st.sidebar.success(f"✅ 현재: {current_rate:.3f}%")
-                    st.sidebar.info(f"30일 평균: {avg_rate:.3f}%")
-                    st.success(f"🏦 RF 테스트 성공: {current_rate:.3f}%")
+                    st.sidebar.success(f"✅ Current: {current_rate:.3f}%")
+                    st.sidebar.info(f"30-day Avg: {avg_rate:.3f}%")
+                    st.success(f"🏦 ^IRX Test Success: {current_rate:.3f}%")
                 else:
-                    st.error(f"❌ {st.session_state.rf_ticker} 데이터를 가져올 수 없습니다.")
+                    st.error(f"❌ Cannot fetch ^IRX data")
             except Exception as e:
-                st.error(f"🚨 RF 테스트 실패: {str(e)}")
+                st.error(f"🚨 ^IRX Test Failed: {str(e)}")
     
     def _select_preset(self):
         """프리셋 선택"""
@@ -376,11 +383,11 @@ class StreamlinedRealtimeDashboard:
         with col3:
             st.metric("Components", len(preset['components']))
         with col4:
-            rf_status = "📊 Dynamic" if HAS_RF_UTILS else "📌 Fixed"
+            rf_status = "📊 Dynamic" if (HAS_RF_UTILS and st.session_state.use_dynamic_rf) else "📌 Fixed"
             st.metric("Risk-Free Rate", f"{rf_status}")
         
         # Risk-Free Rate 상세 정보
-        if HAS_RF_UTILS:
+        if HAS_RF_UTILS and st.session_state.use_dynamic_rf:
             self._display_rf_info()
         
         # 탭 생성
@@ -446,7 +453,7 @@ class StreamlinedRealtimeDashboard:
                         benchmark_ticker=preset['benchmark'],
                         benchmark_name=preset['name'],
                         training_cutoff_date=datetime(2024, 12, 31),
-                        rf_ticker=st.session_state.rf_ticker,
+                        rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                         default_rf_rate=st.session_state.default_rf_rate
                     )
                     
@@ -514,7 +521,7 @@ class StreamlinedRealtimeDashboard:
                         benchmark_ticker=preset['benchmark'],
                         benchmark_name=preset['name'],
                         training_cutoff_date=datetime(2024, 12, 31),
-                        rf_ticker=st.session_state.rf_ticker,
+                        rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                         default_rf_rate=st.session_state.default_rf_rate
                     )
                     
@@ -541,7 +548,7 @@ class StreamlinedRealtimeDashboard:
             benchmark=preset['benchmark'],
             components=preset['components'],
             name=preset['name'],
-            rf_ticker=st.session_state.rf_ticker,
+            rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
             default_rf_rate=st.session_state.default_rf_rate
         )
         
@@ -782,7 +789,7 @@ class StreamlinedRealtimeDashboard:
                     jump_penalty=50.0,  # 기존 코드 파라미터 복원
                     use_paper_features_only=True,  # 기존 코드 파라미터 복원
                     training_cutoff_date=datetime(2024, 12, 31),
-                    rf_ticker=st.session_state.rf_ticker,
+                    rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                     default_rf_rate=st.session_state.default_rf_rate
                 )
                 
@@ -1003,8 +1010,23 @@ class StreamlinedRealtimeDashboard:
         """Risk-Free Rate 분석"""
         st.subheader("🏦 Risk-Free Rate Analysis")
         
+        if not st.session_state.use_dynamic_rf:
+            st.info(f"📌 **Fixed Rate Mode**: Using {st.session_state.default_rf_rate*100:.1f}%")
+            st.markdown("""
+            **Fixed Rate Benefits:**
+            - Consistent performance metrics
+            - Stable Sharpe ratio calculations
+            - No dependency on market conditions
+            
+            **To enable Dynamic RF analysis:**
+            - Switch to "Dynamic (^IRX)" mode in the sidebar
+            - Requires risk_free_rate_utils.py
+            """)
+            return
+        
         if not HAS_RF_UTILS:
             st.warning("⚠️ Dynamic Risk-Free Rate analysis requires risk_free_rate_utils.py")
+            st.info("Currently using fixed rate mode")
             return
         
         # 분석 기간 선택
@@ -1016,8 +1038,8 @@ class StreamlinedRealtimeDashboard:
             index=3
         )
         
-        if st.button("📊 Analyze RF Data", type="primary"):
-            with st.spinner("Analyzing Risk-Free Rate data..."):
+        if st.button("📊 Analyze Dynamic RF Data", type="primary"):
+            with st.spinner("Analyzing ^IRX Risk-Free Rate data..."):
                 self._analyze_rf_data(selected_days)
     
     def _analyze_rf_data(self, days):
@@ -1050,13 +1072,13 @@ class StreamlinedRealtimeDashboard:
                     x=rf_data.index,
                     y=rf_data.values * 100,
                     mode='lines',
-                    name=f'Risk-Free Rate ({st.session_state.rf_ticker})',
+                    name='Risk-Free Rate (^IRX)',
                     line=dict(color='blue', width=2)
                 ))
                 fig_rf.add_hline(y=stats['mean_rate'], line_dash="dash", 
                                line_color="red", annotation_text=f"Average: {stats['mean_rate']:.3f}%")
                 fig_rf.update_layout(
-                    title=f"Risk-Free Rate Trend ({st.session_state.rf_ticker})",
+                    title="^IRX Risk-Free Rate Trend",
                     xaxis_title="Date",
                     yaxis_title="Rate (%)",
                     height=400
@@ -1113,7 +1135,7 @@ class StreamlinedRealtimeDashboard:
                     rs_timeframe=params['timeframe'],
                     rs_recent_cross_days=params['cross_days'],
                     use_jump_model=params['use_jump'],
-                    rf_ticker=st.session_state.rf_ticker,
+                    rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                     default_rf_rate=st.session_state.default_rf_rate,
                     training_cutoff_date=datetime(2024, 12, 31)
                 )
@@ -1132,7 +1154,7 @@ class StreamlinedRealtimeDashboard:
                         'use_jump_model': params['use_jump'],
                         'training_cutoff': '2024-12-31' if params['use_jump'] else 'N/A',
                         'rf_ticker': st.session_state.rf_ticker,
-                        'dynamic_rf_used': HAS_RF_UTILS
+                        'dynamic_rf_used': st.session_state.use_dynamic_rf and HAS_RF_UTILS
                     }
                     st.success("✅ Backtest completed!")
                 else:
