@@ -25,14 +25,7 @@ class RiskFreeRateManager:
     
     def download_risk_free_rate(self, start_date, end_date):
         """
-        Risk-free rate 데이터 다운로드
-        
-        Parameters:
-        - start_date: 시작일
-        - end_date: 종료일
-        
-        Returns:
-        - pandas.Series: 일일 risk-free rate (소수점 형태, 예: 0.05 = 5%)
+        Risk-free rate 데이터 다운로드 - 포맷팅 에러 수정
         """
         try:
             print(f"Risk-free rate 데이터 다운로드 중... ({self.rf_ticker})")
@@ -71,7 +64,9 @@ class RiskFreeRateManager:
                 print(f"Warning: 요청 기간의 {self.rf_ticker} 데이터가 없습니다. 기본 금리 사용")
                 return self._create_default_rf_series(start_date, end_date)
             
-            print(f"Risk-free rate 데이터: {len(rf_series)}개 (평균: {rf_series.mean()*100:.2f}%)")
+            # 포맷팅 에러 수정: Series를 직접 포맷팅하지 않음
+            avg_rate = rf_series.mean()
+            print(f"Risk-free rate 데이터: {len(rf_series)}개 (평균: {avg_rate*100:.2f}%)")
             
             self.rf_data = rf_series
             return rf_series
