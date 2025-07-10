@@ -211,7 +211,8 @@ class EnhancedRealtimeDashboard:
         st.markdown("### Real-time Market Monitoring & Signal Generation (All ETFs + Dynamic RF)")
         
         # 수정사항 알림
-        st.success("🔧 **Version 2.1.0**: MODEL_INIT_ERROR 수정 완료! UniversalJumpModel 매개변수 문제 해결")
+        st.success("🔧 **Version 2.2.0**: Series conversion 오류 방어 코드 추가! 데이터 전처리 강화")
+        st.info("🔄 **New Feature**: pandas Series → float 변환 오류 자동 감지 및 처리")
         
         # Risk-Free Rate 상태 표시
         rf_status = "📊 동적" if HAS_RF_UTILS else "📌 고정"
@@ -750,20 +751,20 @@ class EnhancedRealtimeDashboard:
                     st.info("💡 Check your internet connection or try a simpler analysis")
     
     def analyze_single_etf_regime(self, ticker, name):
-        """단일 ETF의 시장 체제 분석 - 수정된 매개변수 사용"""
+        """단일 ETF의 시장 체제 분석 - 데이터 품질 강화"""
         debug_info = []
         detailed_error = None
         
         try:
             debug_info.append(f"[{datetime.now().strftime('%H:%M:%S')}] Starting analysis for {ticker} ({name})")
             
-            # 데이터 확인 단계
-            debug_info.append(f"[Step 1] Checking data availability for {ticker}")
+            # 데이터 확인 및 전처리 단계
+            debug_info.append(f"[Step 1] Checking and preprocessing data for {ticker}")
             
-            # yfinance로 기본 데이터 확인
             try:
                 ticker_obj = yf.Ticker(ticker)
-                hist = ticker_obj.history(period="2y")  # 2년 데이터로 확인
+                hist = ticker_obj.history(period="3y")  # 3년 데이터로 확장
+                
                 if hist.empty:
                     debug_info.append(f"[Step 1] FAILED: No historical data for {ticker}")
                     return {
@@ -772,60 +773,93 @@ class EnhancedRealtimeDashboard:
                         'debug_info': debug_info,
                         'detailed_error': f"No historical data available for {ticker}"
                     }
+                
+                # 데이터 품질 검사 및 정리
+                debug_info.append(f"[Step 1.1] Raw data: {len(hist)} days")
+                
+                # NaN 값 확인
+                nan_counts = hist.isnull().sum()
+                if nan_counts.any():
+                    debug_info.append(f"[Step 1.1] Found NaN values: {dict(nan_counts)}")
+                    # NaN 값이 있는 행 제거
+                    hist_clean = hist.dropna()
+                    debug_info.append(f"[Step 1.1] After cleaning: {len(hist_clean)} days")
                 else:
-                    debug_info.append(f"[Step 1] SUCCESS: Found {len(hist)} days of data")
-                    
-                    # 데이터 품질 확인
-                    if len(hist) < 100:
-                        debug_info.append(f"[Step 1] WARNING: Limited data ({len(hist)} days)")
-                        return {
-                            'ticker': ticker, 'name': name, 'regime': 'INSUFFICIENT_DATA',
-                            'confidence': 0.0, 'status': 'insufficient_data',
-                            'debug_info': debug_info,
-                            'detailed_error': f"Insufficient data: only {len(hist)} days available (need 100+)"
-                        }
-                        
+                    hist_clean = hist
+                    debug_info.append(f"[Step 1.1] Data clean: no NaN values")
+                
+                # 데이터 타입 확인
+                for col in hist_clean.columns:
+                    if not pd.api.types.is_numeric_dtype(hist_clean[col]):
+                        debug_info.append(f"[Step 1.1] WARNING: Non-numeric column {col}")
+                
+                # 충분한 데이터 확인
+                if len(hist_clean) < 200:
+                    debug_info.append(f"[Step 1] FAILED: Insufficient clean data ({len(hist_clean)} days)")
+                    return {
+                        'ticker': ticker, 'name': name, 'regime': 'INSUFFICIENT_DATA',
+                        'confidence': 0.0, 'status': 'insufficient_data',
+                        'debug_info': debug_info,
+                        'detailed_error': f"Insufficient clean data: {len(hist_clean)} days (need 200+)"
+                    }
+                
+                # 데이터 연속성 확인
+                price_changes = hist_clean['Close'].pct_change().dropna()
+                if len(price_changes) == 0:
+                    debug_info.append(f"[Step 1] FAILED: No valid price changes calculated")
+                    return {
+                        'ticker': ticker, 'name': name, 'regime': 'DATA_FORMAT_ERROR',
+                        'confidence': 0.0, 'status': 'data_format_error',
+                        'debug_info': debug_info,
+                        'detailed_error': "Unable to calculate valid price changes"
+                    }
+                
+                # 극값 확인 (일일 변동률 ±50% 초과 시 이상 데이터로 간주)
+                extreme_changes = price_changes[abs(price_changes) > 0.5]
+                if len(extreme_changes) > len(price_changes) * 0.01:  # 1% 이상이 극값이면 문제
+                    debug_info.append(f"[Step 1.1] WARNING: {len(extreme_changes)} extreme price changes detected")
+                
+                debug_info.append(f"[Step 1] SUCCESS: Data validation passed - {len(hist_clean)} clean days")
+                
             except Exception as e:
-                debug_info.append(f"[Step 1] ERROR: {str(e)}")
+                debug_info.append(f"[Step 1] ERROR: Data preprocessing failed - {str(e)}")
                 return {
                     'ticker': ticker, 'name': name, 'regime': 'DATA_FETCH_ERROR',
                     'confidence': 0.0, 'status': 'data_fetch_error',
                     'debug_info': debug_info,
-                    'detailed_error': f"Failed to fetch data: {str(e)}"
+                    'detailed_error': f"Data preprocessing failed: {str(e)}"
                 }
             
-            # JumpModel 초기화 단계 (수정된 매개변수만 사용)
+            # JumpModel 초기화 단계 (강화된 오류 처리)
             debug_info.append(f"[Step 2] Initializing JumpModel for {ticker}")
             
             try:
-                # 실제 UniversalJumpModel이 지원하는 매개변수만 사용
+                # 안전한 매개변수로 시작
                 jump_model = UniversalJumpModel(
                     benchmark_ticker=ticker,
                     benchmark_name=name,
-                    jump_penalty=20.0,  # 낮은 패널티로 민감도 증가
+                    jump_penalty=20.0,
                     training_cutoff_date=datetime(2024, 12, 31),
                     rf_ticker=st.session_state.rf_ticker,
                     default_rf_rate=st.session_state.default_rf_rate
                 )
-                debug_info.append(f"[Step 2] SUCCESS: JumpModel initialized with jump_penalty=20.0")
+                debug_info.append(f"[Step 2] SUCCESS: JumpModel initialized")
                 
             except Exception as e:
-                debug_info.append(f"[Step 2] ERROR: JumpModel initialization failed - {str(e)}")
+                debug_info.append(f"[Step 2] ERROR: First initialization failed - {str(e)}")
                 
-                # 더 관대한 매개변수로 재시도
+                # 최소 매개변수로 재시도
                 try:
                     debug_info.append(f"[Step 2] Retrying with minimal parameters...")
                     jump_model = UniversalJumpModel(
                         benchmark_ticker=ticker,
                         benchmark_name=name,
-                        training_cutoff_date=datetime(2024, 12, 31),
-                        rf_ticker=st.session_state.rf_ticker,
-                        default_rf_rate=st.session_state.default_rf_rate
+                        training_cutoff_date=datetime(2024, 12, 31)
                     )
-                    debug_info.append(f"[Step 2] SUCCESS: JumpModel initialized with default parameters")
+                    debug_info.append(f"[Step 2] SUCCESS: Minimal initialization succeeded")
                     
                 except Exception as e2:
-                    debug_info.append(f"[Step 2] FAILED: Both initialization attempts failed")
+                    debug_info.append(f"[Step 2] FAILED: All initialization attempts failed")
                     return {
                         'ticker': ticker, 'name': name, 'regime': 'MODEL_INIT_ERROR',
                         'confidence': 0.0, 'status': 'model_init_error',
@@ -833,23 +867,51 @@ class EnhancedRealtimeDashboard:
                         'detailed_error': f"JumpModel initialization failed: {str(e2)}"
                     }
             
-            # 체제 분석 단계
+            # 체제 분석 단계 (추가 보호)
             debug_info.append(f"[Step 3] Analyzing regime for {ticker}")
             
             try:
+                # 체제 분석 실행
                 current_regime = jump_model.get_current_regime_with_training_cutoff()
                 
-                if current_regime:
+                if current_regime and isinstance(current_regime, dict):
+                    # 결과 유효성 검사
+                    required_keys = ['regime', 'confidence', 'date']
+                    missing_keys = [key for key in required_keys if key not in current_regime]
+                    
+                    if missing_keys:
+                        debug_info.append(f"[Step 3] WARNING: Missing keys in result: {missing_keys}")
+                    
+                    # confidence 값 검증
+                    confidence = current_regime.get('confidence', 0)
+                    if isinstance(confidence, pd.Series):
+                        debug_info.append(f"[Step 3] WARNING: Confidence is Series, converting to float")
+                        try:
+                            confidence = float(confidence.iloc[-1]) if len(confidence) > 0 else 0.0
+                        except:
+                            confidence = 0.0
+                    elif not isinstance(confidence, (int, float)):
+                        debug_info.append(f"[Step 3] WARNING: Confidence type {type(confidence)}, converting")
+                        try:
+                            confidence = float(confidence)
+                        except:
+                            confidence = 0.0
+                    
+                    # 신뢰도 범위 검증
+                    if not (0 <= confidence <= 1):
+                        debug_info.append(f"[Step 3] WARNING: Confidence {confidence} out of range, clamping")
+                        confidence = max(0, min(1, confidence))
+                    
                     debug_info.append(f"[Step 3] SUCCESS: Regime analysis completed")
-                    debug_info.append(f"[Result] Regime: {current_regime['regime']}, Confidence: {current_regime['confidence']:.3f}")
+                    debug_info.append(f"[Result] Regime: {current_regime['regime']}, Confidence: {confidence:.3f}")
                     
                     result = {
                         'ticker': ticker,
                         'name': name,
                         'regime': current_regime['regime'],
-                        'confidence': current_regime['confidence'],
+                        'confidence': confidence,
                         'is_out_of_sample': current_regime.get('is_out_of_sample', False),
-                        'analysis_date': current_regime['date'].strftime('%Y-%m-%d'),
+                        'analysis_date': current_regime['date'].strftime('%Y-%m-%d') if hasattr(current_regime['date'], 'strftime') else str(current_regime['date']),
                         'rf_ticker': current_regime.get('rf_ticker', st.session_state.rf_ticker),
                         'current_rf_rate': current_regime.get('current_rf_rate', st.session_state.default_rf_rate * 100),
                         'dynamic_rf_used': current_regime.get('dynamic_rf_used', False),
@@ -859,60 +921,57 @@ class EnhancedRealtimeDashboard:
                     
                     # 디버그 모드에서 즉시 결과 표시
                     if st.session_state.debug_mode:
-                        st.success(f"✅ {ticker}: {current_regime['regime']} (Confidence: {current_regime['confidence']:.1%})")
+                        st.success(f"✅ {ticker}: {current_regime['regime']} (Confidence: {confidence:.1%})")
                     
                     return result
                     
                 else:
-                    debug_info.append(f"[Step 3] FAILED: No regime data returned")
-                    debug_info.append(f"[Analysis] Model executed but returned empty result")
-                    
-                    # 추가 진단
-                    try:
-                        # 데이터 길이 재확인
-                        ticker_obj = yf.Ticker(ticker)
-                        long_hist = ticker_obj.history(period="5y")
-                        if len(long_hist) < 252:
-                            debug_info.append(f"[Diagnosis] Still insufficient data: {len(long_hist)} days for 5Y period")
-                            detailed_error = f"Insufficient historical data: {len(long_hist)} days (recommended 252+)"
-                        else:
-                            debug_info.append(f"[Diagnosis] Data seems sufficient: {len(long_hist)} days")
-                            detailed_error = "Model analysis completed but no regime determination possible"
-                    except:
-                        detailed_error = "Unable to perform additional diagnostics"
+                    debug_info.append(f"[Step 3] FAILED: Invalid or no regime data returned")
+                    debug_info.append(f"[Analysis] Result type: {type(current_regime)}, Content: {current_regime}")
                     
                     return {
                         'ticker': ticker, 'name': name, 'regime': 'NO_REGIME_DATA',
                         'confidence': 0.0, 'status': 'no_regime_data',
                         'debug_info': debug_info,
-                        'detailed_error': detailed_error
+                        'detailed_error': "Model returned invalid or empty regime data"
                     }
                     
             except Exception as e:
-                debug_info.append(f"[Step 3] ERROR: Regime analysis failed - {str(e)}")
-                detailed_error = f"Regime analysis error: {str(e)}"
+                error_str = str(e)
+                debug_info.append(f"[Step 3] ERROR: Regime analysis failed - {error_str}")
                 
-                # 오류 유형 분류
-                error_str = str(e).lower()
-                if "insufficient" in error_str or "empty" in error_str:
-                    regime_status = 'INSUFFICIENT_DATA'
-                elif "404" in error_str or "not found" in error_str:
-                    regime_status = 'TICKER_NOT_FOUND'
-                elif "timeout" in error_str or "connection" in error_str:
-                    regime_status = 'CONNECTION_ERROR'
-                elif "permission" in error_str or "forbidden" in error_str:
-                    regime_status = 'ACCESS_DENIED'
-                elif "index" in error_str or "key" in error_str:
-                    regime_status = 'DATA_FORMAT_ERROR'
+                # Series 변환 오류 특별 처리
+                if "cannot convert the series to" in error_str.lower():
+                    debug_info.append(f"[Step 3] DIAGNOSIS: Pandas Series conversion error detected")
+                    detailed_error = f"Data type conversion error in regime analysis: {error_str}"
+                    regime_status = 'SERIES_CONVERSION_ERROR'
+                elif "float" in error_str.lower() and "series" in error_str.lower():
+                    debug_info.append(f"[Step 3] DIAGNOSIS: Series to float conversion error")
+                    detailed_error = f"Series to float conversion failed: {error_str}"
+                    regime_status = 'SERIES_CONVERSION_ERROR'
                 else:
-                    regime_status = 'ANALYSIS_ERROR'
+                    # 기존 오류 분류
+                    if "insufficient" in error_str.lower() or "empty" in error_str.lower():
+                        regime_status = 'INSUFFICIENT_DATA'
+                    elif "404" in error_str or "not found" in error_str.lower():
+                        regime_status = 'TICKER_NOT_FOUND'
+                    elif "timeout" in error_str.lower() or "connection" in error_str.lower():
+                        regime_status = 'CONNECTION_ERROR'
+                    elif "permission" in error_str.lower() or "forbidden" in error_str.lower():
+                        regime_status = 'ACCESS_DENIED'
+                    elif "index" in error_str.lower() or "key" in error_str.lower():
+                        regime_status = 'DATA_FORMAT_ERROR'
+                    else:
+                        regime_status = 'ANALYSIS_ERROR'
+                    
+                    detailed_error = f"Regime analysis error: {error_str}"
                 
                 return {
                     'ticker': ticker, 'name': name, 'regime': regime_status,
                     'confidence': 0.0, 'status': 'analysis_error',
                     'debug_info': debug_info,
                     'detailed_error': detailed_error,
-                    'raw_error': str(e)
+                    'raw_error': error_str
                 }
                 
         except Exception as e:
@@ -1294,6 +1353,7 @@ class EnhancedRealtimeDashboard:
                             'CONNECTION_ERROR': '🌐 Network/API connection issues',
                             'ACCESS_DENIED': '🔒 Access denied to data source',
                             'DATA_FORMAT_ERROR': '📋 Data format or structure issues',
+                            'SERIES_CONVERSION_ERROR': '🔄 Pandas Series to float conversion error',
                             'ANALYSIS_ERROR': '⚙️ Model analysis failed',
                             'PROCESSING_ERROR': '🔄 Processing pipeline error',
                             'FATAL_ERROR': '💥 Unexpected system error',
@@ -1344,6 +1404,12 @@ class EnhancedRealtimeDashboard:
                                         "Verify model dependencies are installed",
                                         "Try with default parameters only"
                                     ],
+                                    'SERIES_CONVERSION_ERROR': [
+                                        "Data type conversion issue in UniversalJumpModel",
+                                        "May require fixing universal_jump_model.py",
+                                        "Try with different jump_penalty values",
+                                        "Check for NaN values in price data"
+                                    ],
                                     'INSUFFICIENT_DATA': [
                                         "Ticker may be newly listed",
                                         "Try longer analysis period",
@@ -1367,7 +1433,10 @@ class EnhancedRealtimeDashboard:
                                         st.markdown(f"• {solution}")
                         
                         # GLD 특별 처리 (자주 문제가 되는 경우)
-                        if 'GLD' in [result['ticker'] for result in results.values() if result['regime'] not in ['BULL', 'BEAR']]:
+                        gld_failed_tickers = [result['ticker'] for result in results.values() 
+                                            if result['ticker'] == 'GLD' and result['regime'] not in ['BULL', 'BEAR']]
+                        
+                        if gld_failed_tickers:
                             st.warning("⚠️ **GLD (Gold ETF) Analysis Issue Detected**")
                             gld_result = next((r for r in results.values() if r['ticker'] == 'GLD'), None)
                             if gld_result:
@@ -1375,17 +1444,44 @@ class EnhancedRealtimeDashboard:
                                 if 'detailed_error' in gld_result:
                                     st.text(f"Details: {gld_result['detailed_error']}")
                                 
-                                st.markdown("""
-                                **GLD 분석 실패 일반적 원인:**
-                                • 금 가격의 특수한 변동성 패턴
-                                • 주식 시장과 다른 체제 전환 특성  
-                                • 인플레이션/디플레이션 상관관계
-                                
-                                **권장 해결책:**
-                                • 더 긴 분석 기간 사용
-                                • 낮은 jump_penalty 설정
-                                • 금 특화 분석 모델 고려
-                                """)
+                                # Series conversion error 특별 처리
+                                if gld_result['regime'] == 'SERIES_CONVERSION_ERROR':
+                                    st.error("🔄 **Series Conversion Error Detected for GLD**")
+                                    st.markdown("""
+                                    **이 오류는 UniversalJumpModel 내부의 데이터 처리 문제입니다:**
+                                    
+                                    **가능한 원인:**
+                                    • pandas Series → float 변환 실패
+                                    • 인덱싱 문제로 스칼라 대신 Series 반환
+                                    • NaN 값이나 데이터 품질 문제
+                                    
+                                    **해결을 위해 다음 파일 수정이 필요할 수 있습니다:**
+                                    • `universal_jump_model.py` (가장 가능성 높음)
+                                    • `universal_rs_strategy.py`
+                                    • `risk_free_rate_utils.py`
+                                    """)
+                                    
+                                    if st.button("📁 Request File Analysis", key="gld_file_analysis"):
+                                        st.info("""
+                                        **필요한 파일들을 공유해주세요:**
+                                        1. `universal_jump_model.py` - 주요 분석 로직
+                                        2. `universal_rs_strategy.py` - RS 전략 계산
+                                        3. `risk_free_rate_utils.py` - RF 관련 계산 (선택사항)
+                                        
+                                        이 파일들의 코드를 확인하여 Series → float 변환 문제를 수정하겠습니다.
+                                        """)
+                                else:
+                                    st.markdown("""
+                                    **GLD 분석 실패 일반적 원인:**
+                                    • 금 가격의 특수한 변동성 패턴
+                                    • 주식 시장과 다른 체제 전환 특성  
+                                    • 인플레이션/디플레이션 상관관계
+                                    
+                                    **권장 해결책:**
+                                    • 더 긴 분석 기간 사용
+                                    • 낮은 jump_penalty 설정
+                                    • 금 특화 분석 모델 고려
+                                    """)
                         
                         # 전체적인 성공률 개선 제안
                         if success_rate < 50:
@@ -1397,10 +1493,16 @@ class EnhancedRealtimeDashboard:
                             3. **재시도**: 잠시 후 다시 시도
                             4. **디버그 모드**: 상세한 오류 정보 확인
                             5. **데이터 소스**: Yahoo Finance 서비스 상태 확인
+                            6. **코드 수정**: Series conversion 오류 시 관련 파일 수정 필요
                             """)
                         elif success_rate < 70:
                             st.warning("⚠️ **Moderate Success Rate**")
                             st.markdown("일부 티커에서 분석 실패. 개별 오류 정보를 확인하여 문제를 해결하세요.")
+                            
+                            # Series conversion error 비율 확인
+                            series_errors = sum(1 for r in results.values() if r['regime'] == 'SERIES_CONVERSION_ERROR')
+                            if series_errors > 0:
+                                st.warning(f"🔄 {series_errors}개 티커에서 Series conversion 오류 발생. 코드 레벨 수정이 필요할 수 있습니다.")
                     
                     # RF 통계
                     if dynamic_rf_count > 0:
@@ -2326,10 +2428,10 @@ def main():
         # 시작 시 버전 정보 표시
         st.sidebar.markdown("---")
         st.sidebar.markdown("**🔧 Dashboard Info**")
-        st.sidebar.info("Version: 2.1.0 (Fixed MODEL_INIT_ERROR)")
-        st.sidebar.success("✅ UniversalJumpModel parameters fixed")
-        st.sidebar.info("🏅 GLD analysis should now work")
-        st.sidebar.info("Enhanced: Detailed error diagnostics")
+        st.sidebar.info("Version: 2.2.0 (Series Conversion Fix)")
+        st.sidebar.success("✅ Enhanced data preprocessing")
+        st.sidebar.warning("🔄 Series→float conversion protection")
+        st.sidebar.info("🏅 Improved GLD error diagnostics")
         
         dashboard = EnhancedRealtimeDashboard()
         dashboard.run()
