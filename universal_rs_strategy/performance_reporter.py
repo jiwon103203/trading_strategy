@@ -1,6 +1,7 @@
 """
-성과 리포트 생성기
+성과 리포트 생성기 - 동적 Risk-Free Rate 지원
 HTML 및 PDF 형식의 전문적인 백테스트 리포트 생성
+미국 3개월물 금리(^IRX)를 사용한 동적 Sharpe/Sortino ratio 계산
 """
 
 import pandas as pd
@@ -13,26 +14,57 @@ from matplotlib.backends.backend_pdf import PdfPages
 import warnings
 warnings.filterwarnings('ignore')
 
+# Risk-free rate 유틸리티 import
+try:
+    from risk_free_rate_utils import RiskFreeRateManager, calculate_dynamic_sharpe_ratio, calculate_dynamic_sortino_ratio
+    HAS_RF_UTILS = True
+except ImportError:
+    print("Warning: risk_free_rate_utils.py가 없습니다. 기본 risk-free rate (2%) 사용")
+    HAS_RF_UTILS = False
+
 class PerformanceReporter:
-    """전문적인 성과 리포트 생성"""
+    """전문적인 성과 리포트 생성 - 동적 Risk-Free Rate 지원"""
     
-    def __init__(self, strategy_name, portfolio_df, trades_df, benchmark_df=None):
+    def __init__(self, strategy_name, portfolio_df, trades_df, benchmark_df=None, 
+                 rf_ticker='^IRX', default_rf_rate=0.02):
         """
         Parameters:
         - strategy_name: 전략 이름
         - portfolio_df: 포트폴리오 데이터
         - trades_df: 거래 데이터
         - benchmark_df: 벤치마크 데이터 (선택사항)
+        - rf_ticker: Risk-free rate 티커 (기본: ^IRX)
+        - default_rf_rate: 기본 risk-free rate (기본: 2%)
         """
         self.strategy_name = strategy_name
         self.portfolio_df = portfolio_df
         self.trades_df = trades_df
         self.benchmark_df = benchmark_df
+        self.rf_ticker = rf_ticker
+        self.default_rf_rate = default_rf_rate
+        
+        # Risk-free rate 관리자 초기화
+        if HAS_RF_UTILS:
+            self.rf_manager = RiskFreeRateManager(rf_ticker, default_rf_rate)
+            self._download_risk_free_rate()
+        else:
+            self.rf_manager = None
+        
         self.metrics = self._calculate_all_metrics()
         
+    def _download_risk_free_rate(self):
+        """Risk-free rate 데이터 다운로드"""
+        if self.rf_manager and not self.portfolio_df.empty:
+            start_date = self.portfolio_df.index[0]
+            end_date = self.portfolio_df.index[-1]
+            self.rf_manager.download_risk_free_rate(start_date, end_date)
+        
     def _calculate_all_metrics(self):
-        """모든 성과 지표 계산"""
+        """모든 성과 지표 계산 (동적 Risk-Free Rate 지원)"""
         metrics = {}
+        
+        if self.portfolio_df.empty:
+            return metrics
         
         # 기본 지표
         metrics['start_date'] = self.portfolio_df.index[0]
@@ -44,12 +76,48 @@ class PerformanceReporter:
         # 수익률
         metrics['total_return'] = (metrics['final_capital'] / metrics['initial_capital'] - 1) * 100
         years = (metrics['end_date'] - metrics['start_date']).days / 365.25
-        metrics['annual_return'] = (np.power(1 + metrics['total_return']/100, 1/years) - 1) * 100
+        metrics['annual_return'] = (np.power(1 + metrics['total_return']/100, 1/years) - 1) * 100 if years > 0 else 0
         
         # 변동성
         returns = self.portfolio_df['value'].pct_change().dropna()
-        metrics['annual_volatility'] = returns.std() * np.sqrt(252) * 100
-        metrics['sharpe_ratio'] = (metrics['annual_return'] - 2) / metrics['annual_volatility']
+        metrics['annual_volatility'] = returns.std() * np.sqrt(252) * 100 if len(returns) > 0 else 0
+        
+        # 동적 Sharpe/Sortino Ratio 계산
+        if HAS_RF_UTILS and self.rf_manager:
+            try:
+                print("동적 Risk-Free Rate를 사용한 성과 지표 계산 중...")
+                
+                # Sharpe Ratio (동적)
+                sharpe_ratio = self.rf_manager.calculate_sharpe_ratio(returns, self.portfolio_df.index)
+                metrics['sharpe_ratio'] = sharpe_ratio
+                
+                # Sortino Ratio (동적)
+                sortino_ratio = self.rf_manager.calculate_sortino_ratio(returns, self.portfolio_df.index)
+                metrics['sortino_ratio'] = sortino_ratio
+                
+                # Risk-free rate 통계
+                rf_stats = self.rf_manager.get_risk_free_rate_stats(
+                    metrics['start_date'], metrics['end_date']
+                )
+                metrics['avg_risk_free_rate'] = rf_stats['mean_rate']
+                metrics['start_risk_free_rate'] = rf_stats['start_rate']
+                metrics['end_risk_free_rate'] = rf_stats['end_rate']
+                
+                print(f"평균 Risk-Free Rate: {rf_stats['mean_rate']:.3f}%")
+                print(f"Sharpe Ratio (동적): {sharpe_ratio:.3f}")
+                print(f"Sortino Ratio (동적): {sortino_ratio:.3f}")
+                
+            except Exception as e:
+                print(f"동적 성과 지표 계산 실패: {e}")
+                # 기본 방식으로 fallback
+                metrics['sharpe_ratio'] = (metrics['annual_return'] - self.default_rf_rate * 100) / metrics['annual_volatility'] if metrics['annual_volatility'] > 0 else 0
+                metrics['sortino_ratio'] = self._calculate_basic_sortino(returns)
+                metrics['avg_risk_free_rate'] = self.default_rf_rate * 100
+        else:
+            # 기본 방식 (2% 고정)
+            metrics['sharpe_ratio'] = (metrics['annual_return'] - self.default_rf_rate * 100) / metrics['annual_volatility'] if metrics['annual_volatility'] > 0 else 0
+            metrics['sortino_ratio'] = self._calculate_basic_sortino(returns)
+            metrics['avg_risk_free_rate'] = self.default_rf_rate * 100
         
         # 낙폭
         cumulative = (1 + returns).cumprod()
@@ -89,6 +157,25 @@ class PerformanceReporter:
         
         return metrics
     
+    def _calculate_basic_sortino(self, returns, rf_rate=None):
+        """기본 Sortino ratio 계산 (동적 risk-free rate 없을 때)"""
+        try:
+            if rf_rate is None:
+                rf_rate = self.default_rf_rate
+            
+            excess_returns = returns - rf_rate/252  # 일일 risk-free rate
+            downside_returns = excess_returns[excess_returns < 0]
+            
+            if len(downside_returns) > 0:
+                downside_deviation = downside_returns.std() * np.sqrt(252)
+                annual_excess_return = excess_returns.mean() * 252
+                return annual_excess_return / downside_deviation if downside_deviation > 0 else 0
+            else:
+                return float('inf')  # 하방 변동성이 0인 경우
+                
+        except Exception:
+            return 0.0
+    
     def _calculate_avg_holding_period(self):
         """평균 보유 기간 계산"""
         if self.trades_df.empty:
@@ -110,9 +197,39 @@ class PerformanceReporter:
         return np.mean(holding_periods) if holding_periods else 0
     
     def generate_html_report(self, filename=None):
-        """HTML 형식의 리포트 생성"""
+        """HTML 형식의 리포트 생성 (동적 Risk-Free Rate 정보 포함)"""
         if filename is None:
             filename = f"{self.strategy_name.replace(' ', '_')}_report_{datetime.now().strftime('%Y%m%d')}.html"
+        
+        # Risk-free rate 정보
+        rf_info = ""
+        if HAS_RF_UTILS and 'avg_risk_free_rate' in self.metrics:
+            rf_info = f"""
+            <div class="metric-box">
+                <div class="metric-value">
+                    {self.metrics['avg_risk_free_rate']:.3f}%
+                </div>
+                <div class="metric-label">평균 Risk-Free Rate ({self.rf_ticker})</div>
+            </div>
+            """
+        
+        # Sortino ratio 추가
+        sortino_info = ""
+        if 'sortino_ratio' in self.metrics:
+            sortino_value = self.metrics['sortino_ratio']
+            if sortino_value == float('inf'):
+                sortino_display = "∞"
+            else:
+                sortino_display = f"{sortino_value:.2f}"
+            
+            sortino_info = f"""
+            <div class="metric-box">
+                <div class="metric-value">
+                    {sortino_display}
+                </div>
+                <div class="metric-label">소르티노 비율</div>
+            </div>
+            """
         
         html_content = f"""
 <!DOCTYPE html>
@@ -141,7 +258,7 @@ class PerformanceReporter:
         }}
         .metric-grid {{
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
         }}
         .metric-box {{
@@ -165,6 +282,12 @@ class PerformanceReporter:
         }}
         .negative {{
             color: #e74c3c;
+        }}
+        .rf-info {{
+            background-color: #e8f5e8;
+            border-left: 4px solid #27ae60;
+            padding: 10px;
+            margin: 10px 0;
         }}
         table {{
             width: 100%;
@@ -192,6 +315,12 @@ class PerformanceReporter:
         <p>{self.metrics['start_date'].strftime('%Y-%m-%d')} to {self.metrics['end_date'].strftime('%Y-%m-%d')}</p>
     </div>
     
+    <div class="rf-info">
+        <strong>🏦 Risk-Free Rate:</strong> {self.rf_ticker} (미국 3개월물 국채) 사용 | 
+        평균: {self.metrics.get('avg_risk_free_rate', self.default_rf_rate*100):.3f}% | 
+        동적 Sharpe/Sortino Ratio 계산
+    </div>
+    
     <div class="section">
         <h2>핵심 성과 지표</h2>
         <div class="metric-grid">
@@ -211,8 +340,9 @@ class PerformanceReporter:
                 <div class="metric-value">
                     {self.metrics['sharpe_ratio']:.2f}
                 </div>
-                <div class="metric-label">샤프 비율</div>
+                <div class="metric-label">샤프 비율 (동적)</div>
             </div>
+            {sortino_info}
             <div class="metric-box">
                 <div class="metric-value negative">
                     {self.metrics['max_drawdown']:.2f}%
@@ -231,6 +361,7 @@ class PerformanceReporter:
                 </div>
                 <div class="metric-label">승률</div>
             </div>
+            {rf_info}
         </div>
     </div>
     
@@ -266,6 +397,18 @@ class PerformanceReporter:
                 <td>{self.metrics['turnover_rate']:.2f}</td>
             </tr>
             <tr>
+                <td>샤프 비율 (동적 RF)</td>
+                <td>{self.metrics['sharpe_ratio']:.3f}</td>
+            </tr>
+            <tr>
+                <td>소르티노 비율 (동적 RF)</td>
+                <td>{'∞' if self.metrics.get('sortino_ratio') == float('inf') else f"{self.metrics.get('sortino_ratio', 0):.3f}"}</td>
+            </tr>
+            <tr>
+                <td>평균 Risk-Free Rate</td>
+                <td>{self.metrics.get('avg_risk_free_rate', self.default_rf_rate*100):.3f}%</td>
+            </tr>
+            <tr>
                 <td>최고 월간 수익률</td>
                 <td class="positive">{self.metrics['best_month']:.2f}%</td>
             </tr>
@@ -290,7 +433,8 @@ class PerformanceReporter:
     
     <div class="section">
         <p style="text-align: center; color: #7f8c8d; font-size: 12px;">
-            Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 
+            Risk-Free Rate: {self.rf_ticker} (동적 계산)
         </p>
     </div>
 </body>
@@ -307,8 +451,26 @@ class PerformanceReporter:
         """값에 따른 색상 클래스 반환"""
         return 'positive' if value >= 0 else 'negative'
     
+    def save_metrics_csv(self, filename=None):
+        """성과 지표를 CSV로 저장 (Risk-Free Rate 정보 포함)"""
+        if filename is None:
+            filename = f"{self.strategy_name.replace(' ', '_')}_metrics_{datetime.now().strftime('%Y%m%d')}.csv"
+        
+        # 메트릭스에 Risk-Free Rate 정보 추가
+        extended_metrics = self.metrics.copy()
+        extended_metrics['rf_ticker'] = self.rf_ticker
+        extended_metrics['dynamic_rf_used'] = HAS_RF_UTILS
+        
+        metrics_df = pd.DataFrame([extended_metrics]).T
+        metrics_df.columns = ['Value']
+        metrics_df.to_csv(filename)
+        
+        print(f"성과 지표가 CSV로 저장되었습니다: {filename}")
+        return filename
+    
+    # 기존 메소드들은 동일하게 유지
     def generate_pdf_report(self, filename=None):
-        """PDF 형식의 리포트 생성"""
+        """PDF 형식의 리포트 생성 (기존과 동일)"""
         if filename is None:
             filename = f"{self.strategy_name.replace(' ', '_')}_report_{datetime.now().strftime('%Y%m%d')}.pdf"
         
@@ -338,18 +500,27 @@ class PerformanceReporter:
         return filename
     
     def _create_summary_page(self):
-        """요약 페이지 생성"""
+        """요약 페이지 생성 (동적 Risk-Free Rate 정보 포함)"""
         fig = plt.figure(figsize=(8.5, 11))
         fig.suptitle(f'{self.strategy_name} Performance Report', fontsize=16, fontweight='bold')
+        
+        # Risk-Free Rate 정보
+        rf_info = f"Risk-Free Rate: {self.rf_ticker} (평균: {self.metrics.get('avg_risk_free_rate', self.default_rf_rate*100):.3f}%)"
+        
+        # Sortino ratio 정보
+        sortino_display = "∞" if self.metrics.get('sortino_ratio') == float('inf') else f"{self.metrics.get('sortino_ratio', 0):.2f}"
         
         # 텍스트로 요약 정보 표시
         summary_text = f"""
 기간: {self.metrics['start_date'].strftime('%Y-%m-%d')} ~ {self.metrics['end_date'].strftime('%Y-%m-%d')}
 
+{rf_info}
+
 핵심 성과 지표:
 • 총 수익률: {self.metrics['total_return']:.2f}%
 • 연율화 수익률: {self.metrics['annual_return']:.2f}%
-• 샤프 비율: {self.metrics['sharpe_ratio']:.2f}
+• 샤프 비율 (동적): {self.metrics['sharpe_ratio']:.3f}
+• 소르티노 비율 (동적): {sortino_display}
 • 최대 낙폭: {self.metrics['max_drawdown']:.2f}%
 • 연율화 변동성: {self.metrics['annual_volatility']:.2f}%
 
@@ -361,11 +532,14 @@ class PerformanceReporter:
 자본 변화:
 • 초기 자본: {self.metrics['initial_capital']:,.0f}
 • 최종 자본: {self.metrics['final_capital']:,.0f}
+
+동적 Risk-Free Rate 사용: {self.rf_ticker}
 """
         
-        plt.text(0.1, 0.5, summary_text, fontsize=12, verticalalignment='center')
+        plt.text(0.1, 0.5, summary_text, fontsize=11, verticalalignment='center')
         plt.axis('off')
     
+    # 나머지 메소드들은 기존과 동일하므로 생략...
     def _create_performance_charts(self):
         """성과 차트 생성"""
         fig, axes = plt.subplots(2, 2, figsize=(12, 8))
@@ -487,18 +661,6 @@ class PerformanceReporter:
             ax4.grid(True, alpha=0.3)
         
         plt.tight_layout()
-    
-    def save_metrics_csv(self, filename=None):
-        """성과 지표를 CSV로 저장"""
-        if filename is None:
-            filename = f"{self.strategy_name.replace(' ', '_')}_metrics_{datetime.now().strftime('%Y%m%d')}.csv"
-        
-        metrics_df = pd.DataFrame([self.metrics]).T
-        metrics_df.columns = ['Value']
-        metrics_df.to_csv(filename)
-        
-        print(f"성과 지표가 CSV로 저장되었습니다: {filename}")
-        return filename
 
 
 # 사용 예시
@@ -519,11 +681,13 @@ if __name__ == "__main__":
         'price': np.random.uniform(50, 200, 36)
     })
     
-    # 리포터 생성
+    # 리포터 생성 (동적 Risk-Free Rate 사용)
     reporter = PerformanceReporter(
-        strategy_name="Test Strategy",
+        strategy_name="Test Strategy with Dynamic RF",
         portfolio_df=portfolio_df,
-        trades_df=trades_df
+        trades_df=trades_df,
+        rf_ticker='^IRX',  # 미국 3개월물 금리
+        default_rf_rate=0.02
     )
     
     # HTML 리포트 생성
@@ -534,5 +698,12 @@ if __name__ == "__main__":
     
     # 성과 지표 CSV 저장
     reporter.save_metrics_csv()
+    
+    print("\n=== 동적 Risk-Free Rate 성과 지표 ===")
+    for key, value in reporter.metrics.items():
+        if isinstance(value, float):
+            print(f"{key}: {value:.3f}")
+        else:
+            print(f"{key}: {value}")
     
     print("\n모든 리포트가 생성되었습니다!")
