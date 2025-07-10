@@ -6,13 +6,22 @@ import json
 import warnings
 warnings.filterwarnings('ignore')
 
+# Risk-free rate 유틸리티 import
+try:
+    from risk_free_rate_utils import RiskFreeRateManager, calculate_dynamic_sharpe_ratio, calculate_dynamic_sortino_ratio
+    HAS_RF_UTILS = True
+except ImportError:
+    print("Warning: risk_free_rate_utils.py가 없습니다. 기본 risk-free rate (2%) 사용")
+    HAS_RF_UTILS = False
+
 class UniversalRSStrategy:
     """
-    범용 RS (Relative Strength) 전략 - 완전 방탄 버전
+    범용 RS (Relative Strength) 전략 - 완전 방탄 버전 + 동적 Risk-Free Rate 지원
     """
     
     def __init__(self, benchmark, components, name="Custom Strategy", 
-                 length=20, timeframe='daily', recent_cross_days=None):
+                 length=20, timeframe='daily', recent_cross_days=None,
+                 rf_ticker='^IRX', default_rf_rate=0.02):
         """
         Parameters:
         - benchmark: 벤치마크 티커 (예: '^GSPC' for S&P 500)
@@ -21,6 +30,8 @@ class UniversalRSStrategy:
         - length: RS 계산 기간
         - timeframe: 'daily' 또는 'weekly'
         - recent_cross_days: 최근 크로스 필터링 기간
+        - rf_ticker: Risk-free rate 티커 (기본: ^IRX)
+        - default_rf_rate: 기본 risk-free rate (기본: 2%)
         """
         self.benchmark = benchmark
         self.components = components
@@ -28,6 +39,14 @@ class UniversalRSStrategy:
         self.length = length
         self.timeframe = timeframe.lower()
         self.recent_cross_days = recent_cross_days
+        self.rf_ticker = rf_ticker
+        self.default_rf_rate = default_rf_rate
+        
+        # Risk-free rate 관리자 초기화
+        if HAS_RF_UTILS:
+            self.rf_manager = RiskFreeRateManager(rf_ticker, default_rf_rate)
+        else:
+            self.rf_manager = None
         
         # 유효성 검사
         if self.timeframe not in ['daily', 'weekly']:
@@ -37,6 +56,7 @@ class UniversalRSStrategy:
         print(f"벤치마크: {self.benchmark}")
         print(f"구성요소: {len(self.components)}개")
         print(f"설정: timeframe={self.timeframe}, length={self.length}")
+        print(f"Risk-Free Rate: {self.rf_ticker} (기본값: {self.default_rf_rate*100:.1f}%)")
     
     def safe_extract_close(self, data):
         """완전히 안전한 Close 데이터 추출"""
@@ -424,7 +444,7 @@ class UniversalRSStrategy:
         return self.safe_select_components(price_data, benchmark_data, date)
     
     def backtest(self, start_date, end_date, initial_capital=10000000):
-        """간단한 백테스트 시뮬레이션"""
+        """간단한 백테스트 시뮬레이션 (동적 Risk-Free Rate 지원)"""
         print("백테스트 시뮬레이션...")
         
         try:
@@ -455,11 +475,14 @@ class UniversalRSStrategy:
             return pd.DataFrame(), pd.DataFrame()
     
     def calculate_performance_metrics(self, portfolio_df):
-        """성과 지표 계산"""
+        """성과 지표 계산 (동적 Risk-Free Rate 지원)"""
         try:
             if portfolio_df.empty or len(portfolio_df) == 0:
                 return {}
             
+            print(f"\n성과 지표 계산 중... (Risk-Free Rate: {self.rf_ticker})")
+            
+            # 기본 수익률 지표
             total_return = (portfolio_df['value'].iloc[-1] / portfolio_df['value'].iloc[0] - 1) * 100
             
             years = (portfolio_df.index[-1] - portfolio_df.index[0]).days / 365.25
@@ -468,15 +491,169 @@ class UniversalRSStrategy:
             returns = portfolio_df['value'].pct_change().dropna()
             annual_volatility = returns.std() * np.sqrt(252) * 100 if len(returns) > 0 else 0
             
-            sharpe_ratio = (annual_return - 2) / annual_volatility if annual_volatility > 0 else 0
+            # 동적 Risk-Free Rate를 사용한 성과 지표
+            if HAS_RF_UTILS and self.rf_manager:
+                try:
+                    # Risk-free rate 다운로드
+                    start_date = portfolio_df.index[0]
+                    end_date = portfolio_df.index[-1]
+                    self.rf_manager.download_risk_free_rate(start_date, end_date)
+                    
+                    # 동적 Sharpe ratio
+                    sharpe_ratio = self.rf_manager.calculate_sharpe_ratio(returns, portfolio_df.index)
+                    
+                    # 동적 Sortino ratio
+                    sortino_ratio = self.rf_manager.calculate_sortino_ratio(returns, portfolio_df.index)
+                    
+                    # Risk-free rate 통계
+                    rf_stats = self.rf_manager.get_risk_free_rate_stats(start_date, end_date)
+                    
+                    print(f"평균 Risk-Free Rate: {rf_stats['mean_rate']:.3f}%")
+                    print(f"Sharpe Ratio (동적): {sharpe_ratio:.3f}")
+                    print(f"Sortino Ratio (동적): {sortino_ratio:.3f}")
+                    
+                    metrics = {
+                        '총 수익률': f"{total_return:.2f}%",
+                        '연율화 수익률': f"{annual_return:.2f}%",
+                        '연율화 변동성': f"{annual_volatility:.2f}%",
+                        '샤프 비율 (동적)': f"{sharpe_ratio:.3f}",
+                        '소르티노 비율 (동적)': f"{sortino_ratio:.3f}" if sortino_ratio != float('inf') else "∞",
+                        '평균 Risk-Free Rate': f"{rf_stats['mean_rate']:.3f}%",
+                        'Risk-Free Rate 티커': self.rf_ticker,
+                        'Risk-Free Rate 범위': f"{rf_stats['min_rate']:.3f}% ~ {rf_stats['max_rate']:.3f}%"
+                    }
+                    
+                except Exception as e:
+                    print(f"동적 성과 지표 계산 실패: {e}")
+                    # 기본 방식으로 fallback
+                    sharpe_ratio = (annual_return - self.default_rf_rate * 100) / annual_volatility if annual_volatility > 0 else 0
+                    
+                    metrics = {
+                        '총 수익률': f"{total_return:.2f}%",
+                        '연율화 수익률': f"{annual_return:.2f}%",
+                        '연율화 변동성': f"{annual_volatility:.2f}%",
+                        '샤프 비율 (기본)': f"{sharpe_ratio:.2f}",
+                        'Risk-Free Rate': f"{self.default_rf_rate*100:.1f}% (기본값)"
+                    }
+            else:
+                # 기본 방식 (2% 고정)
+                sharpe_ratio = (annual_return - self.default_rf_rate * 100) / annual_volatility if annual_volatility > 0 else 0
+                
+                metrics = {
+                    '총 수익률': f"{total_return:.2f}%",
+                    '연율화 수익률': f"{annual_return:.2f}%",
+                    '연율화 변동성': f"{annual_volatility:.2f}%",
+                    '샤프 비율 (기본)': f"{sharpe_ratio:.2f}",
+                    'Risk-Free Rate': f"{self.default_rf_rate*100:.1f}% (기본값)"
+                }
             
-            return {
-                '총 수익률': f"{total_return:.2f}%",
-                '연율화 수익률': f"{annual_return:.2f}%",
-                '연율화 변동성': f"{annual_volatility:.2f}%",
-                '샤프 비율': f"{sharpe_ratio:.2f}"
-            }
+            return metrics
             
         except Exception as e:
             print(f"성과 계산 오류: {e}")
             return {}
+    
+    def get_dynamic_risk_free_stats(self, start_date, end_date):
+        """동적 Risk-Free Rate 통계 정보 반환"""
+        if not HAS_RF_UTILS or not self.rf_manager:
+            return {
+                'ticker': self.rf_ticker,
+                'available': False,
+                'message': 'Risk-free rate utilities not available'
+            }
+        
+        try:
+            self.rf_manager.download_risk_free_rate(start_date, end_date)
+            stats = self.rf_manager.get_risk_free_rate_stats(start_date, end_date)
+            stats['ticker'] = self.rf_ticker
+            stats['available'] = True
+            return stats
+        except Exception as e:
+            return {
+                'ticker': self.rf_ticker,
+                'available': False,
+                'error': str(e)
+            }
+
+
+# 편의 함수들
+def create_strategy_with_dynamic_rf(preset_config, rf_ticker='^IRX', default_rf_rate=0.02, **kwargs):
+    """동적 Risk-Free Rate를 사용하는 전략 생성 편의 함수"""
+    return UniversalRSStrategy(
+        benchmark=preset_config['benchmark'],
+        components=preset_config['components'],
+        name=preset_config['name'],
+        rf_ticker=rf_ticker,
+        default_rf_rate=default_rf_rate,
+        **kwargs
+    )
+
+def quick_performance_analysis(portfolio_df, strategy_name="Strategy", rf_ticker='^IRX'):
+    """빠른 성과 분석 (동적 Risk-Free Rate 사용)"""
+    if HAS_RF_UTILS:
+        sharpe = calculate_dynamic_sharpe_ratio(portfolio_df, rf_ticker)
+        sortino = calculate_dynamic_sortino_ratio(portfolio_df, rf_ticker)
+        
+        print(f"\n=== {strategy_name} 빠른 성과 분석 ===")
+        print(f"동적 Sharpe Ratio: {sharpe:.3f}")
+        print(f"동적 Sortino Ratio: {sortino:.3f}" if sortino != float('inf') else "동적 Sortino Ratio: ∞")
+        print(f"Risk-Free Rate: {rf_ticker}")
+        
+        return {'sharpe': sharpe, 'sortino': sortino, 'rf_ticker': rf_ticker}
+    else:
+        print(f"Risk-free rate utilities가 없습니다. 기본 분석을 수행하세요.")
+        return None
+
+
+# 사용 예시
+if __name__ == "__main__":
+    from datetime import datetime, timedelta
+    
+    # 테스트용 구성요소
+    test_components = {
+        'XLK': 'Technology Select Sector',
+        'XLF': 'Financial Select Sector',
+        'XLV': 'Health Care Select Sector',
+        'XLY': 'Consumer Discretionary Select',
+        'XLI': 'Industrial Select Sector'
+    }
+    
+    # 동적 Risk-Free Rate를 사용하는 전략 생성
+    strategy = UniversalRSStrategy(
+        benchmark='^GSPC',
+        components=test_components,
+        name='Test Strategy with Dynamic RF',
+        length=20,
+        timeframe='daily',
+        rf_ticker='^IRX',  # 미국 3개월물 금리
+        default_rf_rate=0.02
+    )
+    
+    # 백테스트
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365*2)  # 2년
+    
+    print(f"\n백테스트 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
+    
+    portfolio_df, trades_df = strategy.backtest(start_date, end_date)
+    
+    if not portfolio_df.empty:
+        # 성과 지표 계산 (동적 Risk-Free Rate 사용)
+        metrics = strategy.calculate_performance_metrics(portfolio_df)
+        
+        print(f"\n=== {strategy.strategy_name} 성과 결과 ===")
+        for key, value in metrics.items():
+            print(f"{key}: {value}")
+        
+        # Risk-Free Rate 통계
+        rf_stats = strategy.get_dynamic_risk_free_stats(start_date, end_date)
+        if rf_stats['available']:
+            print(f"\n=== Risk-Free Rate 통계 ({rf_stats['ticker']}) ===")
+            print(f"평균: {rf_stats['mean_rate']:.3f}%")
+            print(f"범위: {rf_stats['min_rate']:.3f}% ~ {rf_stats['max_rate']:.3f}%")
+            print(f"표준편차: {rf_stats['std_rate']:.3f}%")
+        
+        # 빠른 성과 분석
+        quick_performance_analysis(portfolio_df, strategy.strategy_name, strategy.rf_ticker)
+    
+    print(f"\n동적 Risk-Free Rate 시스템 테스트 완료!")
