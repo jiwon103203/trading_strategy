@@ -1,0 +1,41 @@
+# Core dependencies
+pandas>=1.5.3
+numpy>=1.24.3
+yfinance>=0.2.18
+matplotlib>=3.7.1
+seaborn>=0.12.2
+plotly>=5.14.1
+
+# Machine Learning
+scikit-learn>=1.2.2
+scipy>=1.10.1
+
+# Performance optimization
+numba>=0.57.1
+psutil>=5.9.5
+
+# Web interface
+streamlit>=1.24.0
+
+# Data handling
+openpyxl>=3.1.2
+xlrd>=2.0.1
+pyyaml>=6.0
+
+# Async support
+aiohttp>=3.8.4
+asyncio>=3.4.3
+
+# Progress bars
+tqdm>=4.65.0
+
+# PDF generation (optional)
+reportlab>=4.0.4
+PyPDF2>=3.0.1
+
+# Additional utilities
+python-dateutil>=2.8.2
+pytz>=2023.3
+requests>=2.31.0
+beautifulsoup4>=4.12.2
+lxml>=4.9.2
