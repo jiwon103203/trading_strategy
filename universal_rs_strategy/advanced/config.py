@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 from dataclasses import dataclass, asdict
 from typing import Optional, Dict, Any
-from ..core.utils import print_status
+from trading_strategy.universal_rs_strategy.core.utils import print_status
 
 @dataclass
 class JumpModelConfig:

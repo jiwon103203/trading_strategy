@@ -14,11 +14,11 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import time
 import yfinance as yf
-from ..core.preset_manager import PresetManager
+from trading_strategy.universal_rs_strategy.core.preset_manager import PresetManager
 from trading_strategy.universal_rs_strategy.core.universal_rs_strategy import UniversalRSStrategy
 from trading_strategy.universal_rs_strategy.core.universal_jump_model import UniversalJumpModel
 from trading_strategy.universal_rs_strategy.core.universal_rs_with_jump import UniversalRSWithJumpModel
-from ..core.utils import safe_float, safe_extract_close, validate_data, calculate_basic_metrics, print_status
+from trading_strategy.universal_rs_strategy.core.utils import safe_float, safe_extract_close, validate_data, calculate_basic_metrics, print_status
 import concurrent.futures
 from threading import Lock
 import traceback
