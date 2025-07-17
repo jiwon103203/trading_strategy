@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import seaborn as sns
 from preset_manager import PresetManager
-from universal_rs_strategy import UniversalRSStrategy
+from trading_strategy.universal_rs_strategy.core.universal_rs_strategy import UniversalRSStrategy
 from universal_jump_model import UniversalJumpModel
 from universal_rs_with_jump import UniversalRSWithJumpModel
 from utils import safe_float, safe_extract_close, validate_data, calculate_basic_metrics, print_status

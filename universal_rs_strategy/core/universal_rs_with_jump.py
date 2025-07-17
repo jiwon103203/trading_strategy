@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from universal_rs_strategy import UniversalRSStrategy
+from trading_strategy.universal_rs_strategy.core.universal_rs_strategy import UniversalRSStrategy
 from universal_jump_model import UniversalJumpModel
 from utils import safe_float, safe_extract_close, validate_data, calculate_basic_metrics, print_status
 import warnings
