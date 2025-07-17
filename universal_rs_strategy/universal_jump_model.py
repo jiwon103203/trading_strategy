@@ -43,22 +43,22 @@ def safe_float_conversion(value, default=0.0):
 
 class UniversalJumpModel:
     """
-    범용 Jump Model with EWM Features - 최종 정리 버전
+    범용 Jump Model with EWM Features - realtime_dashboard.py 기준 통합 버전
     """
     
     def __init__(self, benchmark_ticker, benchmark_name="Market", 
-                 n_states=2, jump_penalty=50.0, use_paper_features_only=False,
+                 n_states=2, jump_penalty=50.0, use_paper_features_only=True,  # 기본값 True로 변경
                  training_cutoff_date=None, rf_ticker='^IRX', default_rf_rate=0.02):
         """
         Parameters:
         - benchmark_ticker: 벤치마크 지수 티커
         - benchmark_name: 벤치마크 이름
         - n_states: 상태 수 (기본값: 2 - Bull/Bear)
-        - jump_penalty: 체제 전환에 대한 페널티
-        - use_paper_features_only: True면 논문의 정확한 3가지 특징만 사용
-        - training_cutoff_date: 학습 데이터 마지막 날짜
-        - rf_ticker: Risk-free rate 티커
-        - default_rf_rate: 기본 risk-free rate
+        - jump_penalty: 체제 전환에 대한 페널티 (기본값: 50.0)
+        - use_paper_features_only: True면 논문의 정확한 3가지 특징만 사용 (기본값: True)
+        - training_cutoff_date: 학습 데이터 마지막 날짜 (기본값: 2024-12-31)
+        - rf_ticker: Risk-free rate 티커 (기본값: ^IRX)
+        - default_rf_rate: 기본 risk-free rate (기본값: 2%)
         """
         self.benchmark_ticker = benchmark_ticker
         self.benchmark_name = benchmark_name
@@ -68,7 +68,7 @@ class UniversalJumpModel:
         self.rf_ticker = rf_ticker
         self.default_rf_rate = default_rf_rate
         
-        # 기본 학습 마감일을 2024년 12월 31일로 설정
+        # 기본 학습 마감일을 2024년 12월 31일로 설정 (realtime_dashboard 기준)
         if training_cutoff_date is None:
             self.training_cutoff_date = datetime(2024, 12, 31)
         else:
@@ -80,35 +80,36 @@ class UniversalJumpModel:
         else:
             self.rf_manager = None
         
-        # 모델 파라미터
+        # 모델 파라미터 (realtime_dashboard 기준)
         self.cluster_centers = None
         self.scaler = StandardScaler()
         self.current_regime = None
         self.state_mapping = None
         self.is_trained = False
         
-        # 최소 데이터 요구량
-        self.min_data_length = 200
+        # 최소 데이터 요구량 (realtime_dashboard 기준)
+        self.min_data_length = 300  # realtime_dashboard에서 사용하는 값
         
         feature_type = "논문 정확한 3특징" if use_paper_features_only else "논문 기반 + 추가 특징"
-        print(f"EWM Jump Model 초기화 (최종): {feature_type}")
+        print(f"EWM Jump Model 초기화 (통합): {feature_type}")
         print(f"학습 마감일: {self.training_cutoff_date.strftime('%Y-%m-%d')}")
         print(f"Risk-Free Rate: {self.rf_ticker} (기본값: {self.default_rf_rate*100:.1f}%)")
     
     def download_benchmark_data(self, start_date, end_date):
-        """벤치마크 데이터 다운로드"""
+        """벤치마크 데이터 다운로드 - realtime_dashboard 기준 강화된 버전"""
         try:
             print(f"{self.benchmark_name} 데이터 다운로드 중...")
             
             extended_start = start_date - timedelta(days=100)
             
+            # realtime_dashboard.py와 동일한 timeout 설정
             data = yf.download(
                 self.benchmark_ticker, 
                 start=extended_start, 
                 end=end_date, 
                 progress=False,
                 auto_adjust=True,
-                timeout=30
+                timeout=30  # realtime_dashboard 기준 timeout
             )
             
             if data.empty:
@@ -118,6 +119,7 @@ class UniversalJumpModel:
             
             if len(data) < self.min_data_length:
                 print(f"경고: {self.benchmark_name} 데이터가 부족합니다 ({len(data)} < {self.min_data_length})")
+                return None  # realtime_dashboard 기준으로 None 반환
             
             print(f"{self.benchmark_name} 데이터: {len(data)}일")
             return data
@@ -127,21 +129,22 @@ class UniversalJumpModel:
             return None
     
     def _safe_download_risk_free_rate(self, start_date, end_date):
-        """안전한 Risk-free rate 다운로드 (포맷 에러 수정)"""
+        """안전한 Risk-free rate 다운로드 - realtime_dashboard 기준 에러 처리"""
         try:
             if not HAS_RF_UTILS or not self.rf_manager:
                 return None
             
             print(f"Risk-free rate 데이터 다운로드 중... ({self.rf_ticker})")
             
-            # 🔧 포맷 에러 수정: 직접 yfinance 사용
+            # realtime_dashboard 기준 직접 yfinance 사용
             try:
                 rf_raw = yf.download(
                     self.rf_ticker,
                     start=start_date - timedelta(days=30),
                     end=end_date + timedelta(days=1),
                     progress=False,
-                    auto_adjust=True
+                    auto_adjust=True,
+                    timeout=30  # realtime_dashboard 기준
                 )
                 
                 if rf_raw.empty:
@@ -161,7 +164,7 @@ class UniversalJumpModel:
                 # NaN 값 처리
                 rf_series = rf_series.fillna(method='ffill').fillna(method='bfill')
                 
-                # 백분율을 소수점으로 변환 (예: 5.0 -> 0.05)
+                # 백분율을 소수점으로 변환
                 rf_series = rf_series / 100.0
                 
                 # 요청 기간으로 제한
@@ -183,13 +186,13 @@ class UniversalJumpModel:
             return None
     
     def calculate_features(self, price_data):
-        """특징 계산 - 최종 정리 버전"""
+        """특징 계산 - realtime_dashboard 기준 안정화 버전"""
         try:
             if price_data is None or price_data.empty:
                 print(f"❌ 가격 데이터가 없음")
                 return pd.DataFrame()
             
-            # 1단계: 수익률 계산 (확실히 Series로 변환)
+            # 1단계: 수익률 계산 (realtime_dashboard 기준 강화된 검증)
             try:
                 if 'Close' not in price_data.columns:
                     print(f"❌ Close 컬럼이 없음")
@@ -215,7 +218,7 @@ class UniversalJumpModel:
                         print(f"❌ pct_change DataFrame이 비어있음")
                         return pd.DataFrame()
                 
-                # 최종 확인
+                # 최종 확인 (realtime_dashboard 기준)
                 if not isinstance(returns, pd.Series):
                     print(f"❌ returns가 Series가 아님: {type(returns)}")
                     return pd.DataFrame()
@@ -230,7 +233,7 @@ class UniversalJumpModel:
                 print(f"❌ 수익률 계산 오류: {e}")
                 return pd.DataFrame()
             
-            # 2단계: 동적 Risk-free rate 처리 (수정된 버전)
+            # 2단계: 동적 Risk-free rate 처리 (realtime_dashboard 기준)
             try:
                 start_date = returns.index[0]
                 end_date = returns.index[-1]
@@ -260,7 +263,7 @@ class UniversalJumpModel:
                     use_dynamic_rf = False
                     print(f"    고정 Risk-Free Rate 사용: {self.default_rf_rate*100:.1f}%")
                 
-                # 초과수익률 계산 (Series - Series = Series)
+                # 초과수익률 계산
                 excess_returns = returns - daily_rf_rates
                 
                 if not isinstance(excess_returns, pd.Series):
@@ -271,7 +274,7 @@ class UniversalJumpModel:
                 
             except Exception as e:
                 print(f"❌ Risk-free rate 처리 오류: {e}")
-                # Fallback
+                # Fallback (realtime_dashboard 기준)
                 daily_rf_rates = pd.Series(
                     self.default_rf_rate / 252, 
                     index=returns.index,
@@ -280,12 +283,12 @@ class UniversalJumpModel:
                 excess_returns = returns - daily_rf_rates
                 use_dynamic_rf = False
             
-            # 3단계: 특징 계산
+            # 3단계: 특징 계산 (realtime_dashboard 기준 - 주로 논문 특징 사용)
             try:
                 if self.use_paper_features_only:
-                    features_df = self._calculate_paper_features(excess_returns, use_dynamic_rf)
+                    features_df = self._calculate_paper_features_unified(excess_returns, use_dynamic_rf)
                 else:
-                    features_df = self._calculate_enhanced_features(excess_returns, returns, use_dynamic_rf)
+                    features_df = self._calculate_enhanced_features_unified(excess_returns, returns, use_dynamic_rf)
                 
                 if features_df is None or features_df.empty:
                     print(f"❌ 특징 계산 결과가 비어있음")
@@ -302,12 +305,12 @@ class UniversalJumpModel:
             print(f"❌ 특징 계산 치명적 오류: {e}")
             return pd.DataFrame()
     
-    def _calculate_paper_features(self, excess_returns, use_dynamic_rf):
-        """논문 특징 계산 - 최종 안정화 버전"""
+    def _calculate_paper_features_unified(self, excess_returns, use_dynamic_rf):
+        """논문 특징 계산 - realtime_dashboard 기준 통합 버전"""
         try:
             print(f"    논문 특징 계산 시작... (동적 RF: {use_dynamic_rf})")
             
-            # 입력 검증
+            # 입력 검증 (realtime_dashboard 기준)
             if not isinstance(excess_returns, pd.Series):
                 print(f"    ❌ excess_returns가 Series가 아님: {type(excess_returns)}")
                 return pd.DataFrame()
@@ -315,23 +318,21 @@ class UniversalJumpModel:
             # 하방 수익률 계산
             negative_excess_returns = excess_returns.where(excess_returns < 0, 0)
             
-            # Feature 1: Downside Deviation (halflife=10)
+            # Feature 1: Downside Deviation (halflife=10) - realtime_dashboard 기준 안정화
             try:
-                # 🔧 안전한 제곱 연산
                 negative_squared = negative_excess_returns * negative_excess_returns
                 
-                # EWM 계산 (NaN 처리 강화)
                 ewm_dd_var_10 = negative_squared.ewm(
                     halflife=10, 
                     min_periods=20, 
                     adjust=False
                 ).mean()
                 
-                # NaN 값 처리
+                # NaN 값 처리 강화 (realtime_dashboard 기준)
                 ewm_dd_var_10 = ewm_dd_var_10.fillna(method='ffill').fillna(0)
                 
                 downside_deviation_10 = np.sqrt(ewm_dd_var_10.abs()) * np.sqrt(252)
-                downside_deviation_10 = downside_deviation_10.fillna(0)
+                downside_deviation_10 = downside_deviation_10.fillna(0.1)  # 기본값 0.1
                 
                 print(f"    Feature 1 완료: 평균={downside_deviation_10.mean():.6f}")
                 
@@ -339,7 +340,7 @@ class UniversalJumpModel:
                 print(f"    Feature 1 실패: {e}, 기본값 사용")
                 downside_deviation_10 = pd.Series(0.1, index=excess_returns.index)
             
-            # Feature 2: Sortino Ratio (halflife=20)
+            # Feature 2: Sortino Ratio (halflife=20) - realtime_dashboard 기준
             try:
                 ewm_mean_20 = excess_returns.ewm(
                     halflife=20, 
@@ -353,15 +354,15 @@ class UniversalJumpModel:
                     adjust=False
                 ).mean()
                 
-                # NaN 처리
+                # NaN 처리 강화
                 ewm_mean_20 = ewm_mean_20.fillna(method='ffill').fillna(0)
                 ewm_dd_var_20 = ewm_dd_var_20.fillna(method='ffill').fillna(1e-8)
                 
                 ewm_dd_20 = np.sqrt(ewm_dd_var_20.abs()) * np.sqrt(252)
                 
-                # 0으로 나누기 방지
+                # 0으로 나누기 방지 (realtime_dashboard 기준)
                 sortino_ratio_20 = ewm_mean_20 / (ewm_dd_20 + 1e-8)
-                sortino_ratio_20 = sortino_ratio_20.replace([np.inf, -np.inf], 0).fillna(0)
+                sortino_ratio_20 = sortino_ratio_20.replace([np.inf, -np.inf], 1.0).fillna(1.0)
                 
                 print(f"    Feature 2 완료: 평균={sortino_ratio_20.mean():.6f}")
                 
@@ -369,7 +370,7 @@ class UniversalJumpModel:
                 print(f"    Feature 2 실패: {e}, 기본값 사용")
                 sortino_ratio_20 = pd.Series(1.0, index=excess_returns.index)
             
-            # Feature 3: Sortino Ratio (halflife=60)
+            # Feature 3: Sortino Ratio (halflife=60) - realtime_dashboard 기준
             try:
                 ewm_mean_60 = excess_returns.ewm(
                     halflife=60, 
@@ -383,7 +384,7 @@ class UniversalJumpModel:
                     adjust=False
                 ).mean()
                 
-                # NaN 처리
+                # NaN 처리 강화
                 ewm_mean_60 = ewm_mean_60.fillna(method='ffill').fillna(0)
                 ewm_dd_var_60 = ewm_dd_var_60.fillna(method='ffill').fillna(1e-8)
                 
@@ -391,7 +392,7 @@ class UniversalJumpModel:
                 
                 # 0으로 나누기 방지
                 sortino_ratio_60 = ewm_mean_60 / (ewm_dd_60 + 1e-8)
-                sortino_ratio_60 = sortino_ratio_60.replace([np.inf, -np.inf], 0).fillna(0)
+                sortino_ratio_60 = sortino_ratio_60.replace([np.inf, -np.inf], 1.0).fillna(1.0)
                 
                 print(f"    Feature 3 완료: 평균={sortino_ratio_60.mean():.6f}")
                 
@@ -406,8 +407,8 @@ class UniversalJumpModel:
                 'sortino_ratio_60': sortino_ratio_60
             }, index=excess_returns.index)
             
-            # 🔧 강화된 데이터 정리
-            features_df = self._clean_features_dataframe_enhanced(features_df)
+            # realtime_dashboard 기준 강화된 데이터 정리
+            features_df = self._clean_features_dataframe_unified(features_df)
             
             print(f"    ✅ 논문 특징 계산 완료: {len(features_df)}개")
             return features_df
@@ -416,22 +417,22 @@ class UniversalJumpModel:
             print(f"    ❌ 논문 특징 계산 실패: {e}")
             return pd.DataFrame()
     
-    def _clean_features_dataframe_enhanced(self, features_df):
-        """강화된 특징 데이터프레임 정리"""
+    def _clean_features_dataframe_unified(self, features_df):
+        """특징 데이터프레임 정리 - realtime_dashboard 기준 통합 버전"""
         try:
             if features_df is None or features_df.empty:
                 return pd.DataFrame()
             
             print(f"    데이터 정리 시작: {features_df.shape}")
             
-            # 1. 무한대 및 NaN 처리
+            # 1. 무한대 및 NaN 처리 (realtime_dashboard 기준)
             features_df = features_df.replace([np.inf, -np.inf], np.nan)
             
-            # 2. NaN 값 처리 (forward fill → backward fill → 기본값)
+            # 2. NaN 값 처리
             features_df = features_df.fillna(method='ffill')
             features_df = features_df.fillna(method='bfill')
             
-            # 3. 컬럼별 기본값 설정
+            # 3. 컬럼별 기본값 설정 (realtime_dashboard 기준)
             default_values = {
                 'downside_deviation_10': 0.1,  # 10% 기본 변동성
                 'sortino_ratio_20': 1.0,       # 중립적 Sortino ratio
@@ -442,7 +443,7 @@ class UniversalJumpModel:
                 if col in features_df.columns:
                     features_df[col] = features_df[col].fillna(default_val)
             
-            # 4. 이상값 처리 (컬럼별 개별 처리)
+            # 4. 이상값 처리 (realtime_dashboard 기준 보수적 범위)
             for col in features_df.columns:
                 if col.startswith('downside_deviation'):
                     # 하방변동성: 0~100% 범위로 제한
@@ -451,12 +452,12 @@ class UniversalJumpModel:
                     # Sortino ratio: -10~10 범위로 제한
                     features_df[col] = features_df[col].clip(lower=-10, upper=10)
             
-            # 5. 초기 불안정한 값들 제거
+            # 5. 초기 불안정한 값들 제거 (realtime_dashboard 기준)
             stable_start = max(120, len(features_df) // 4)
             if len(features_df) > stable_start:
                 features_df = features_df.iloc[stable_start:].copy()
             
-            # 6. 최종 유효성 검사
+            # 6. 최종 유효성 검사 (realtime_dashboard 기준)
             if len(features_df) < 50:
                 print(f"    ⚠️ 최종 데이터가 부족: {len(features_df)}")
                 return pd.DataFrame()
@@ -483,18 +484,18 @@ class UniversalJumpModel:
             print(f"    ❌ 데이터 정리 실패: {e}")
             return pd.DataFrame()
     
-    def _calculate_enhanced_features(self, excess_returns, returns, use_dynamic_rf):
-        """논문 기반 + 추가 특징들"""
+    def _calculate_enhanced_features_unified(self, excess_returns, returns, use_dynamic_rf):
+        """논문 기반 + 추가 특징들 - realtime_dashboard 기준"""
         try:
             # 먼저 논문 특징 계산
-            features_df = self._calculate_paper_features(excess_returns, use_dynamic_rf)
+            features_df = self._calculate_paper_features_unified(excess_returns, use_dynamic_rf)
             
             if features_df.empty:
                 return pd.DataFrame()
             
             print(f"    추가 특징 계산...")
             
-            # 추가 특징들 (안전한 계산)
+            # 추가 특징들 (realtime_dashboard 기준 안전한 계산)
             try:
                 # 변동성
                 variance = (excess_returns * excess_returns).ewm(halflife=20, min_periods=20).mean()
@@ -525,7 +526,7 @@ class UniversalJumpModel:
             return pd.DataFrame()
     
     def fit_jump_model(self, features_df):
-        """Jump Model 학습"""
+        """Jump Model 학습 - realtime_dashboard 기준 에러 처리 강화"""
         try:
             if features_df.empty or len(features_df) < 50:
                 print(f"학습용 특징 데이터 부족: {len(features_df)}")
@@ -533,7 +534,7 @@ class UniversalJumpModel:
             
             X = features_df.values
             
-            # 무효한 값 확인 및 정리
+            # 무효한 값 확인 및 정리 (realtime_dashboard 기준)
             if np.any(np.isnan(X)) or np.any(np.isinf(X)):
                 print("특징 데이터 정리 중...")
                 X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
@@ -545,7 +546,7 @@ class UniversalJumpModel:
                 print(f"스케일링 실패: {e}")
                 return None
             
-            # 초기 클러스터링
+            # 초기 클러스터링 (realtime_dashboard 기준 파라미터)
             try:
                 kmeans = KMeans(n_clusters=self.n_states, random_state=42, n_init=10, max_iter=300)
                 initial_states = kmeans.fit_predict(X_scaled)
@@ -576,7 +577,7 @@ class UniversalJumpModel:
             return None
     
     def optimize_with_jump_penalty(self, X, initial_states):
-        """Jump penalty를 적용하여 상태 시퀀스 최적화"""
+        """Jump penalty 최적화 - realtime_dashboard 기준"""
         try:
             n_samples = len(X)
             states = initial_states.copy()
@@ -621,7 +622,7 @@ class UniversalJumpModel:
             return initial_states
     
     def analyze_regimes(self, features_df, states):
-        """체제별 특성 분석 및 Bull/Bear 레이블링"""
+        """체제별 특성 분석 - realtime_dashboard 기준"""
         try:
             regime_stats = {}
             
@@ -648,7 +649,7 @@ class UniversalJumpModel:
                         'avg_sortino_60': 0.0
                     }
             
-            # Bear 상태 식별
+            # Bear 상태 식별 (realtime_dashboard 기준)
             state_scores = {}
             for state in range(self.n_states):
                 bear_score = (
@@ -669,7 +670,7 @@ class UniversalJumpModel:
                     self.state_mapping[state] = 'BULL'
             
             # 통계 출력
-            print(f"\n=== {self.benchmark_name} EWM 체제별 특성 (최종) ===")
+            print(f"\n=== {self.benchmark_name} EWM 체제별 특성 (통합) ===")
             feature_info = "논문 정확한 3특징" if self.use_paper_features_only else "논문 기반 + 추가"
             print(f"특징: {feature_info}")
             
@@ -690,7 +691,7 @@ class UniversalJumpModel:
             return {}
     
     def predict_regime(self, current_features):
-        """현재 시장 체제 예측"""
+        """현재 시장 체제 예측 - realtime_dashboard 기준 안정화"""
         if not self.is_trained or self.cluster_centers is None:
             raise ValueError("모델이 학습되지 않았습니다.")
         
@@ -725,7 +726,7 @@ class UniversalJumpModel:
             else:
                 predicted_state = np.argmin(distances)
                 
-                # Jump penalty 고려
+                # Jump penalty 고려 (realtime_dashboard 기준)
                 if (self.current_regime is not None and 
                     predicted_state != self.current_regime and
                     len(distances) > self.current_regime):
@@ -758,7 +759,7 @@ class UniversalJumpModel:
             return 'BULL', 0.5
     
     def train_model_with_cutoff(self, start_date=None, end_date=None):
-        """특정 기간의 데이터로만 모델 학습"""
+        """특정 기간의 데이터로만 모델 학습 - realtime_dashboard 기준"""
         if end_date is None:
             end_date = self.training_cutoff_date
         
@@ -801,7 +802,7 @@ class UniversalJumpModel:
             return False
     
     def get_current_regime_with_training_cutoff(self):
-        """학습 마감일까지만 학습하고 현재 체제 예측"""
+        """학습 마감일까지만 학습하고 현재 체제 예측 - realtime_dashboard 기준 통합"""
         try:
             if not self.is_trained:
                 print(f"모델 학습 시작: {self.benchmark_name}")
@@ -848,10 +849,10 @@ class UniversalJumpModel:
             
             is_out_of_sample = latest_date > self.training_cutoff_date
             
-            # 안전한 confidence 변환
+            # 안전한 confidence 변환 (realtime_dashboard 기준)
             safe_confidence = safe_float_conversion(confidence, 0.5)
             
-            # RF 정보 추가
+            # RF 정보 추가 (realtime_dashboard 기준)
             try:
                 if HAS_RF_UTILS and self.rf_manager:
                     rf_data = self._safe_download_risk_free_rate(
@@ -870,6 +871,7 @@ class UniversalJumpModel:
                 current_rf_rate = self.default_rf_rate * 100
                 avg_rf_rate_30d = self.default_rf_rate * 100
             
+            # realtime_dashboard 기준 분석 정보
             analysis_info = {
                 'regime': str(current_regime),
                 'confidence': safe_confidence,
@@ -896,18 +898,18 @@ class UniversalJumpModel:
         return self.get_current_regime_with_training_cutoff()
 
 
-# 테스트 함수
-def test_final_jump_model():
-    """최종 Jump Model 테스트"""
-    print("=== 최종 Jump Model 테스트 ===")
+# realtime_dashboard.py 기준 테스트 함수
+def test_unified_jump_model():
+    """통합 Jump Model 테스트 - realtime_dashboard 기준"""
+    print("=== 통합 Jump Model 테스트 (realtime_dashboard 기준) ===")
     
-    # SPY 테스트
-    print("\n1. SPY 테스트 (최종 버전)")
+    # SPY 테스트 (realtime_dashboard 기준 파라미터)
+    print("\n1. SPY 테스트 (통합 버전)")
     spy_model = UniversalJumpModel(
         benchmark_ticker='SPY',
         benchmark_name='SPDR S&P 500 ETF',
-        use_paper_features_only=True,
-        jump_penalty=50.0,
+        use_paper_features_only=True,  # realtime_dashboard 기준
+        jump_penalty=50.0,  # realtime_dashboard 기준
         rf_ticker='^IRX'
     )
     
@@ -926,26 +928,23 @@ def test_final_jump_model():
     else:
         print("❌ SPY 분석 실패")
     
-    # 다른 티커 테스트
-    test_tickers = [('QQQ', 'Nasdaq 100'), ('GLD', 'Gold ETF')]
-    
-    for ticker, name in test_tickers:
-        print(f"\n2. {ticker} 테스트")
-        try:
-            model = UniversalJumpModel(
-                benchmark_ticker=ticker,
-                benchmark_name=name,
-                use_paper_features_only=True,
-                rf_ticker='^IRX'
-            )
-            
-            result = model.get_current_regime_with_training_cutoff()
-            if result:
-                print(f"✅ {ticker}: {result['regime']} (신뢰도: {result['confidence']:.2%})")
-            else:
-                print(f"❌ {ticker} 분석 실패")
-        except Exception as e:
-            print(f"❌ {ticker} 오류: {str(e)[:50]}...")
+    # QQQ 테스트 (realtime_dashboard 기준)
+    print(f"\n2. QQQ 테스트 (통합 버전)")
+    try:
+        qqq_model = UniversalJumpModel(
+            benchmark_ticker='QQQ',
+            benchmark_name='Nasdaq 100',
+            use_paper_features_only=True,  # realtime_dashboard 기준
+            rf_ticker='^IRX'
+        )
+        
+        result = qqq_model.get_current_regime_with_training_cutoff()
+        if result:
+            print(f"✅ QQQ: {result['regime']} (신뢰도: {result['confidence']:.2%})")
+        else:
+            print(f"❌ QQQ 분석 실패")
+    except Exception as e:
+        print(f"❌ QQQ 오류: {str(e)[:50]}...")
 
 if __name__ == "__main__":
-    test_final_jump_model()
+    test_unified_jump_model()
