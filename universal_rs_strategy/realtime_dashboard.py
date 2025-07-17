@@ -1,5 +1,5 @@
 """
-실시간 모니터링 대시보드 - 효율화된 버전
+실시간 모니터링 대시보드 - 통합된 Jump Model 사용
 웹 기반 인터랙티브 대시보드 (Streamlit 사용)
 전체 ETF 지원 + 종합 Bull/Bear 상태 모니터링
 2024년까지 학습, 2025년 추론 모델 적용
@@ -16,7 +16,7 @@ import time
 import yfinance as yf
 from preset_manager import PresetManager
 from universal_rs_strategy import UniversalRSStrategy
-from universal_jump_model import UniversalJumpModel
+from universal_jump_model import UniversalJumpModel  # 통합된 모델 사용
 from universal_rs_with_jump import UniversalRSWithJumpModel
 import concurrent.futures
 from threading import Lock
@@ -32,7 +32,7 @@ except ImportError:
 
 # Streamlit 페이지 설정
 st.set_page_config(
-    page_title="Universal RS Strategy Dashboard - Dynamic RF Edition",
+    page_title="Universal RS Strategy Dashboard - Unified Model Edition",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -78,7 +78,7 @@ st.markdown("""
     margin: 10px 0;
     border-radius: 5px;
 }
-.dynamic-rf {
+.unified-model {
     background-color: #f3e5f5;
     border-left: 4px solid #9c27b0;
     padding: 10px;
@@ -89,7 +89,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def safe_data_check(data):
-    """안전한 데이터 검증"""
+    """안전한 데이터 검증 - 통합 버전"""
     try:
         if data is None:
             return False
@@ -104,7 +104,7 @@ def safe_data_check(data):
         return False
 
 def safe_get_value(value, default=0):
-    """안전한 값 추출"""
+    """안전한 값 추출 - 통합 버전"""
     try:
         if pd.isna(value):
             return default
@@ -118,8 +118,8 @@ def safe_get_value(value, default=0):
     except Exception:
         return default
 
-class StreamlinedRealtimeDashboard:
-    """실시간 모니터링 대시보드 - 효율화된 버전"""
+class UnifiedRealtimeDashboard:
+    """실시간 모니터링 대시보드 - 통합된 Jump Model 사용"""
     
     def __init__(self):
         self._init_session_state()
@@ -140,7 +140,7 @@ class StreamlinedRealtimeDashboard:
         self.cache_duration = timedelta(minutes=30)
     
     def _init_session_state(self):
-        """세션 상태 초기화"""
+        """세션 상태 초기화 - 통합 모델 기준"""
         defaults = {
             'selected_preset': None,
             'last_update': None,
@@ -151,7 +151,9 @@ class StreamlinedRealtimeDashboard:
             'regime_analysis_mode': 'all',
             'rf_ticker': '^IRX',
             'default_rf_rate': 0.02,
-            'use_dynamic_rf': True,  # 기본값: Dynamic RF 사용
+            'use_dynamic_rf': True,
+            'use_paper_features_only': True,  # 통합 모델 기본값
+            'jump_penalty': 50.0,  # 통합 모델 기본값
             'debug_mode': False
         }
         
@@ -161,14 +163,15 @@ class StreamlinedRealtimeDashboard:
     
     def run(self):
         """대시보드 실행"""
-        st.title("🚀 Universal RS Strategy Dashboard - Dynamic RF Edition")
-        st.markdown("### Real-time Market Monitoring & Signal Generation")
+        st.title("🚀 Universal RS Strategy Dashboard - Unified Model Edition")
+        st.markdown("### Real-time Market Monitoring & Signal Generation with Unified Jump Model")
         
-        st.success("📊 **RF Mode Selection**: Choose between Dynamic (^IRX) or Fixed Rate!")
+        st.success("🔧 **Unified Model**: Jump Model 특징 계산 코드가 통합되었습니다!")
         
         # Risk-Free Rate 상태 표시
         rf_status = "📊 Dynamic" if (HAS_RF_UTILS and st.session_state.use_dynamic_rf) else "📌 Fixed"
-        st.markdown(f"**🏦 Risk-Free Rate**: ^IRX ({rf_status}) | **🎯 Training**: 2005-2024 | **🔮 Inference**: 2025")
+        feature_type = "논문 정확한 3특징" if st.session_state.use_paper_features_only else "논문 기반 + 추가"
+        st.markdown(f"**🏦 Risk-Free Rate**: ^IRX ({rf_status}) | **🎯 Features**: {feature_type} | **🔮 Jump Penalty**: {st.session_state.jump_penalty}")
         
         # 사이드바 및 메인 컨텐츠
         self.create_sidebar()
@@ -179,7 +182,7 @@ class StreamlinedRealtimeDashboard:
             st.info("👈 Please select a strategy preset from the sidebar to begin")
     
     def create_sidebar(self):
-        """사이드바 생성"""
+        """사이드바 생성 - 통합 모델 설정 포함"""
         st.sidebar.header("Configuration")
         
         # 디버그 모드
@@ -189,14 +192,14 @@ class StreamlinedRealtimeDashboard:
             help="Show detailed error information"
         )
         
+        # 통합 모델 설정
+        self._configure_unified_model()
+        
         # Risk-Free Rate 설정
         self._configure_risk_free_rate()
         
         # 프리셋 선택
         self._select_preset()
-        
-        # 전략 파라미터
-        self._strategy_parameters()
         
         # 실행 버튼
         self._control_buttons()
@@ -207,9 +210,41 @@ class StreamlinedRealtimeDashboard:
         # 버전 정보
         st.sidebar.markdown("---")
         st.sidebar.markdown("**📊 Dashboard Info**")
-        st.sidebar.info("Version: 3.1.0 (RF Mode Selection)")
-        st.sidebar.success("✅ Dynamic/Fixed RF selection")
-        st.sidebar.success("✅ ^IRX only (simplified)")
+        st.sidebar.info("Version: 4.0.0 (Unified Model)")
+        st.sidebar.success("✅ Jump Model 특징 계산 통합")
+        st.sidebar.success("✅ realtime_dashboard 기준 최적화")
+    
+    def _configure_unified_model(self):
+        """통합 모델 설정"""
+        st.sidebar.subheader("🔧 Unified Jump Model Settings")
+        
+        # Feature Type 설정
+        feature_mode = st.sidebar.radio(
+            "Feature Type",
+            ["논문 정확한 3특징", "논문 기반 + 추가 특징"],
+            index=0 if st.session_state.use_paper_features_only else 1,
+            help="논문 정확한 3특징: realtime_dashboard 기준 최적화된 특징만 사용"
+        )
+        
+        st.session_state.use_paper_features_only = (feature_mode == "논문 정확한 3특징")
+        
+        # Jump Penalty 설정
+        st.session_state.jump_penalty = st.sidebar.number_input(
+            "Jump Penalty",
+            min_value=10.0,
+            max_value=100.0,
+            value=st.session_state.jump_penalty,
+            step=10.0,
+            help="체제 전환 억제 강도 (높을수록 안정적)"
+        )
+        
+        # 모델 상태 표시
+        if st.session_state.use_paper_features_only:
+            st.sidebar.success("📊 논문 정확한 3특징 (최적화)")
+        else:
+            st.sidebar.info("📈 논문 기반 + 추가 특징")
+        
+        st.sidebar.info(f"🎯 Jump Penalty: {st.session_state.jump_penalty}")
     
     def _configure_risk_free_rate(self):
         """Risk-Free Rate 설정"""
@@ -285,34 +320,6 @@ class StreamlinedRealtimeDashboard:
             st.session_state.selected_preset = self.presets[preset_name]
             st.session_state.preset_name = preset_name
     
-    def _strategy_parameters(self):
-        """전략 파라미터 설정"""
-        st.sidebar.subheader("Strategy Parameters")
-        
-        col1, col2 = st.sidebar.columns(2)
-        with col1:
-            rs_length = st.number_input("RS Length", value=20, min_value=10, max_value=50)
-            use_jump = st.checkbox("Use Jump Model", value=True)
-        
-        with col2:
-            timeframe = st.selectbox("Timeframe", ["daily", "weekly"])
-            use_cross = st.checkbox("Use Cross Filter", value=False)
-        
-        cross_days = st.sidebar.number_input("Cross Days", value=30, min_value=5, max_value=90) if use_cross else None
-        
-        # 백테스트 설정
-        st.sidebar.subheader("Backtest Settings")
-        backtest_years = st.sidebar.slider("Backtest Period (Years)", 1, 5, 3)
-        
-        # 세션 상태에 저장
-        st.session_state.strategy_params = {
-            'rs_length': rs_length,
-            'timeframe': timeframe,
-            'cross_days': cross_days,
-            'use_jump': use_jump,
-            'backtest_years': backtest_years
-        }
-    
     def _control_buttons(self):
         """제어 버튼들"""
         col1, col2 = st.sidebar.columns(2)
@@ -375,7 +382,7 @@ class StreamlinedRealtimeDashboard:
         preset = st.session_state.selected_preset
         
         # 헤더 정보
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             st.metric("Strategy", st.session_state.preset_name)
         with col2:
@@ -385,6 +392,20 @@ class StreamlinedRealtimeDashboard:
         with col4:
             rf_status = "📊 Dynamic" if (HAS_RF_UTILS and st.session_state.use_dynamic_rf) else "📌 Fixed"
             st.metric("Risk-Free Rate", f"{rf_status}")
+        with col5:
+            feature_status = "📊 3특징" if st.session_state.use_paper_features_only else "📈 확장특징"
+            st.metric("Features", f"{feature_status}")
+        
+        # 통합 모델 정보
+        st.markdown(f"""
+        <div class="unified-model">
+            <strong>🔧 Unified Jump Model Status</strong><br>
+            📊 Feature Type: {'논문 정확한 3특징' if st.session_state.use_paper_features_only else '논문 기반 + 추가 특징'}<br>
+            🎯 Jump Penalty: {st.session_state.jump_penalty} | 
+            🏦 RF Ticker: {st.session_state.rf_ticker} | 
+            📅 Training Cutoff: 2024-12-31
+        </div>
+        """, unsafe_allow_html=True)
         
         # Risk-Free Rate 상세 정보
         if HAS_RF_UTILS and st.session_state.use_dynamic_rf:
@@ -442,16 +463,19 @@ class StreamlinedRealtimeDashboard:
     def _display_market_status(self):
         """시장 상태 표시"""
         st.subheader("Market Regime Analysis")
-        st.markdown("**Training Period**: 2005-2024 | **Inference Period**: 2025")
+        st.markdown("**Unified Model**: Integrated feature calculation | **Training**: 2005-2024 | **Inference**: 2025")
         
         preset = st.session_state.selected_preset
         
-        if st.button("🔍 Analyze Market Regime"):
-            with st.spinner("Analyzing market regime..."):
+        if st.button("🔍 Analyze Market Regime (Unified Model)"):
+            with st.spinner("Analyzing market regime with unified model..."):
                 try:
+                    # 통합 모델 사용 (기본값들이 이미 설정됨)
                     jump_model = UniversalJumpModel(
                         benchmark_ticker=preset['benchmark'],
                         benchmark_name=preset['name'],
+                        use_paper_features_only=st.session_state.use_paper_features_only,
+                        jump_penalty=st.session_state.jump_penalty,
                         training_cutoff_date=datetime(2024, 12, 31),
                         rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                         default_rf_rate=st.session_state.default_rf_rate
@@ -461,7 +485,7 @@ class StreamlinedRealtimeDashboard:
                     
                     if current_regime:
                         self._display_regime_info(current_regime)
-                        st.success("✅ Market regime analysis completed!")
+                        st.success("✅ Market regime analysis completed with unified model!")
                     else:
                         st.error("❌ Unable to analyze market regime")
                         
@@ -471,7 +495,7 @@ class StreamlinedRealtimeDashboard:
                         st.code(traceback.format_exc())
     
     def _display_regime_info(self, regime_info):
-        """체제 정보 표시"""
+        """체제 정보 표시 - 통합 모델 버전"""
         col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
@@ -492,9 +516,9 @@ class StreamlinedRealtimeDashboard:
             st.metric("RF Type", rf_status)
         
         with col5:
-            features = regime_info.get('features', {})
-            risk_adj = safe_get_value(features.get('risk_adjusted_return', 0), 0)
-            st.metric("Risk-Adj Return", f"{risk_adj:.3f}")
+            feature_type = regime_info.get('feature_type', 'Unknown')
+            feature_short = "3특징" if "논문 정확한 3특징" in feature_type else "확장특징"
+            st.metric("Features", feature_short)
         
         # 추가 정보
         col1, col2, col3 = st.columns(3)
@@ -504,8 +528,17 @@ class StreamlinedRealtimeDashboard:
             oos_status = "Out-of-Sample" if regime_info.get('is_out_of_sample', False) else "In-Sample"
             st.info(f"🔮 Status: {oos_status}")
         with col3:
-            rf_ticker = regime_info.get('rf_ticker', st.session_state.rf_ticker)
-            st.info(f"🏦 RF Ticker: {rf_ticker}")
+            training_cutoff = regime_info.get('training_cutoff', '2024-12-31')
+            st.info(f"📚 Training Cutoff: {training_cutoff}")
+        
+        # 특징값 표시
+        features = regime_info.get('features', {})
+        if features:
+            st.markdown("**🔧 Unified Model Features:**")
+            feature_cols = st.columns(len(features))
+            for i, (key, value) in enumerate(features.items()):
+                with feature_cols[i]:
+                    st.metric(key.replace('_', ' ').title(), f"{value:.4f}")
     
     def _display_current_signals(self):
         """현재 투자 신호 표시"""
@@ -513,13 +546,15 @@ class StreamlinedRealtimeDashboard:
         
         preset = st.session_state.selected_preset
         
-        if st.button("🎯 Analyze Investment Signals"):
-            with st.spinner('Analyzing components...'):
+        if st.button("🎯 Analyze Investment Signals (Unified Model)"):
+            with st.spinner('Analyzing components with unified model...'):
                 try:
-                    # 체제 분석
+                    # 통합 모델로 체제 분석
                     jump_model = UniversalJumpModel(
                         benchmark_ticker=preset['benchmark'],
                         benchmark_name=preset['name'],
+                        use_paper_features_only=st.session_state.use_paper_features_only,
+                        jump_penalty=st.session_state.jump_penalty,
                         training_cutoff_date=datetime(2024, 12, 31),
                         rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                         default_rf_rate=st.session_state.default_rf_rate
@@ -573,9 +608,10 @@ class StreamlinedRealtimeDashboard:
         signals_df['RS_Score'] = (signals_df['rs_ratio'] + signals_df['rs_momentum']) / 2
         signals_df = signals_df.sort_values('RS_Score', ascending=False)
         
-        # 투자 권고 메시지
+        # 투자 권고 메시지 (통합 모델 정보 포함)
         if current_regime and current_regime['regime'] == 'BULL':
             current_rf = current_regime.get('current_rf_rate', 0)
+            feature_type = current_regime.get('feature_type', 'Unknown')
             
             if current_rf > 4.0:
                 st.warning(f"🟡 **BULL Market + High RF ({current_rf:.2f}%)** - Conservative investment recommended")
@@ -583,6 +619,8 @@ class StreamlinedRealtimeDashboard:
                 st.success(f"🟢 **BULL Market + Low RF ({current_rf:.2f}%)** - Aggressive investment opportunity!")
             else:
                 st.success(f"🟢 **BULL Market + Normal RF ({current_rf:.2f}%)** - Standard investment execution")
+            
+            st.info(f"🔧 Unified Model: {feature_type} | Jump Penalty: {st.session_state.jump_penalty}")
         
         st.info(f"📊 {len(selected)} Strong Components identified")
         
@@ -600,7 +638,7 @@ class StreamlinedRealtimeDashboard:
                 signals_df.head(15),
                 x='name',
                 y='rs_ratio',
-                title='Top Components by RS-Ratio',
+                title='Top Components by RS-Ratio (Unified Model)',
                 color='rs_ratio',
                 color_continuous_scale='RdYlGn'
             )
@@ -613,7 +651,7 @@ class StreamlinedRealtimeDashboard:
                 signals_df.head(15),
                 x='name',
                 y='rs_momentum',
-                title='Top Components by RS-Momentum',
+                title='Top Components by RS-Momentum (Unified Model)',
                 color='rs_momentum',
                 color_continuous_scale='RdYlGn'
             )
@@ -623,7 +661,7 @@ class StreamlinedRealtimeDashboard:
     
     def _display_all_market_regimes(self):
         """모든 시장 체제 현황 표시"""
-        st.subheader("🌍 All Market Regimes Overview")
+        st.subheader("🌍 All Market Regimes Overview (Unified Model)")
         
         # 분석 모드 표시
         if st.session_state.regime_analysis_mode == 'selected':
@@ -635,10 +673,19 @@ class StreamlinedRealtimeDashboard:
         else:
             st.markdown("**Full Market Analysis** (All ETFs across all strategies)")
         
-        button_text = "🔄 Analyze Selected Tickers" if st.session_state.regime_analysis_mode == 'selected' else "🔄 Analyze All Regimes"
+        # 통합 모델 정보 표시
+        st.markdown(f"""
+        <div class="unified-model">
+            <strong>🔧 Analysis with Unified Jump Model</strong><br>
+            📊 Feature Type: {'논문 정확한 3특징' if st.session_state.use_paper_features_only else '논문 기반 + 추가 특징'}<br>
+            🎯 Jump Penalty: {st.session_state.jump_penalty}
+        </div>
+        """, unsafe_allow_html=True)
+        
+        button_text = "🔄 Analyze Selected Tickers (Unified)" if st.session_state.regime_analysis_mode == 'selected' else "🔄 Analyze All Regimes (Unified)"
         
         if st.button(button_text, type="primary"):
-            with st.spinner("Analyzing market regimes..."):
+            with st.spinner("Analyzing market regimes with unified model..."):
                 if st.session_state.regime_analysis_mode == 'selected':
                     if not st.session_state.selected_tickers_for_regime:
                         st.error("Please select at least one ticker")
@@ -653,7 +700,7 @@ class StreamlinedRealtimeDashboard:
                     st.error("❌ Failed to analyze market regimes")
     
     def _analyze_selected_regimes(self):
-        """선택된 티커들의 체제 분석"""
+        """선택된 티커들의 체제 분석 - 통합 모델"""
         results = {}
         
         for ticker in st.session_state.selected_tickers_for_regime:
@@ -661,12 +708,12 @@ class StreamlinedRealtimeDashboard:
                 # 티커 정보 찾기
                 ticker_name = self._find_ticker_name(ticker)
                 
-                result = self._analyze_single_ticker(ticker, ticker_name)
+                result = self._analyze_single_ticker_unified(ticker, ticker_name)
                 results[ticker] = result
                 
                 # 실시간 결과 표시
                 if result['status'] == 'success':
-                    st.success(f"✅ {ticker}: {result['regime']} (Confidence: {result['confidence']:.1%})")
+                    st.success(f"✅ {ticker}: {result['regime']} (Confidence: {result['confidence']:.1%}) [Unified]")
                 else:
                     st.error(f"❌ {ticker}: {result['regime']}")
                     
@@ -683,7 +730,7 @@ class StreamlinedRealtimeDashboard:
         return results
     
     def _analyze_all_regimes(self):
-        """모든 ETF 체제 분석"""
+        """모든 ETF 체제 분석 - 통합 모델"""
         all_etfs = {}
         benchmarks = {}
         
@@ -708,7 +755,7 @@ class StreamlinedRealtimeDashboard:
         if (st.session_state.cache_timestamp and 
             now - st.session_state.cache_timestamp < self.cache_duration and
             st.session_state.regime_cache):
-            st.info("📋 Using cached results")
+            st.info("📋 Using cached results (Unified Model)")
             return st.session_state.regime_cache
         
         results = {}
@@ -722,9 +769,9 @@ class StreamlinedRealtimeDashboard:
         
         # 벤치마크 분석
         for ticker, name in benchmarks.items():
-            status_text.text(f"Analyzing benchmark: {ticker}")
+            status_text.text(f"Analyzing benchmark with unified model: {ticker}")
             
-            result = self._analyze_single_ticker(ticker, name)
+            result = self._analyze_single_ticker_unified(ticker, name)
             results[ticker] = result
             results[ticker]['type'] = 'benchmark'
             
@@ -733,9 +780,9 @@ class StreamlinedRealtimeDashboard:
         
         # ETF 분석
         for ticker, info in all_etfs.items():
-            status_text.text(f"Analyzing ETF: {ticker}")
+            status_text.text(f"Analyzing ETF with unified model: {ticker}")
             
-            result = self._analyze_single_ticker(ticker, info['name'])
+            result = self._analyze_single_ticker_unified(ticker, info['name'])
             result['type'] = 'etf'
             result['strategies'] = info['strategies']
             results[ticker] = result
@@ -752,10 +799,10 @@ class StreamlinedRealtimeDashboard:
         
         return results
     
-    def _analyze_single_ticker(self, ticker, name):
-        """단일 티커 분석 - 기존 코드 수준의 오류 처리 복원"""
+    def _analyze_single_ticker_unified(self, ticker, name):
+        """단일 티커 분석 - 통합 모델 사용"""
         try:
-            # 1단계: 데이터 사전 검증 (기존 코드 로직 복원)
+            # 1단계: 데이터 사전 검증
             try:
                 ticker_obj = yf.Ticker(ticker)
                 hist = ticker_obj.history(period="5y", timeout=30)
@@ -766,9 +813,9 @@ class StreamlinedRealtimeDashboard:
                         'confidence': 0.0, 'status': 'data_unavailable'
                     }
                 
-                # 데이터 품질 검사
+                # 데이터 품질 검사 (통합 모델 기준)
                 hist_clean = hist.dropna()
-                if len(hist_clean) < 300:
+                if len(hist_clean) < 300:  # 통합 모델의 min_data_length
                     return {
                         'ticker': ticker, 'name': name, 'regime': 'INSUFFICIENT_DATA',
                         'confidence': 0.0, 'status': 'insufficient_data'
@@ -781,13 +828,13 @@ class StreamlinedRealtimeDashboard:
                     'error': str(e)
                 }
             
-            # 2단계: JumpModel 초기화 (기존 파라미터 복원)
+            # 2단계: 통합 JumpModel 초기화
             try:
                 jump_model = UniversalJumpModel(
                     benchmark_ticker=ticker,
                     benchmark_name=name,
-                    jump_penalty=50.0,  # 기존 코드 파라미터 복원
-                    use_paper_features_only=True,  # 기존 코드 파라미터 복원
+                    use_paper_features_only=st.session_state.use_paper_features_only,  # 설정된 값 사용
+                    jump_penalty=st.session_state.jump_penalty,  # 설정된 값 사용
                     training_cutoff_date=datetime(2024, 12, 31),
                     rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                     default_rf_rate=st.session_state.default_rf_rate
@@ -862,6 +909,8 @@ class StreamlinedRealtimeDashboard:
                     'rf_ticker': current_regime.get('rf_ticker', st.session_state.rf_ticker),
                     'current_rf_rate': current_regime.get('current_rf_rate', st.session_state.default_rf_rate * 100),
                     'dynamic_rf_used': current_regime.get('dynamic_rf_used', False),
+                    'feature_type': current_regime.get('feature_type', 'Unknown'),
+                    'unified_model_used': True,  # 통합 모델 사용 표시
                     'status': 'success'
                 }
                 
@@ -891,7 +940,7 @@ class StreamlinedRealtimeDashboard:
         return ticker
     
     def _display_regime_results(self, results):
-        """체제 분석 결과 표시"""
+        """체제 분석 결과 표시 - 통합 모델 버전"""
         # 통계 요약
         bull_count = sum(1 for r in results.values() if r['regime'] == 'BULL')
         bear_count = sum(1 for r in results.values() if r['regime'] == 'BEAR')
@@ -899,6 +948,7 @@ class StreamlinedRealtimeDashboard:
         
         oos_count = sum(1 for r in results.values() if r.get('is_out_of_sample', False))
         dynamic_rf_count = sum(1 for r in results.values() if r.get('dynamic_rf_used', False))
+        unified_model_count = sum(1 for r in results.values() if r.get('unified_model_used', False))
         
         col1, col2, col3, col4, col5, col6 = st.columns(6)
         with col1:
@@ -912,7 +962,18 @@ class StreamlinedRealtimeDashboard:
         with col5:
             st.metric("🔮 Out-of-Sample", oos_count)
         with col6:
+            st.metric("🔧 Unified Model", unified_model_count)
+        
+        # 추가 메트릭
+        col1, col2, col3 = st.columns(3)
+        with col1:
             st.metric("📊 Dynamic RF", dynamic_rf_count)
+        with col2:
+            paper_features_count = sum(1 for r in results.values() if '논문 정확한 3특징' in r.get('feature_type', ''))
+            st.metric("📊 Paper Features", paper_features_count)
+        with col3:
+            success_rate = (bull_count + bear_count) / len(results) * 100 if len(results) > 0 else 0
+            st.metric("Success Rate", f"{success_rate:.1f}%")
         
         # 차트들
         col1, col2, col3 = st.columns(3)
@@ -925,7 +986,7 @@ class StreamlinedRealtimeDashboard:
                     values=[bull_count, bear_count],
                     marker_colors=['#28a745', '#dc3545']
                 )])
-                fig_regime.update_layout(title="Regime Distribution")
+                fig_regime.update_layout(title="Regime Distribution (Unified Model)")
                 st.plotly_chart(fig_regime, use_container_width=True)
         
         with col2:
@@ -940,19 +1001,29 @@ class StreamlinedRealtimeDashboard:
             st.plotly_chart(fig_oos, use_container_width=True)
         
         with col3:
-            # Dynamic RF 분포
-            fixed_rf_count = len(results) - dynamic_rf_count
-            fig_rf = go.Figure(data=[go.Pie(
-                labels=['Dynamic RF', 'Fixed RF'],
-                values=[dynamic_rf_count, fixed_rf_count],
+            # Feature Type 분포
+            enhanced_features_count = len(results) - paper_features_count
+            fig_features = go.Figure(data=[go.Pie(
+                labels=['Paper Features', 'Enhanced Features'],
+                values=[paper_features_count, enhanced_features_count],
                 marker_colors=['#9c27b0', '#795548']
             )])
-            fig_rf.update_layout(title="Risk-Free Rate Type")
-            st.plotly_chart(fig_rf, use_container_width=True)
+            fig_features.update_layout(title="Feature Type Distribution")
+            st.plotly_chart(fig_features, use_container_width=True)
         
         # 성공률 정보
         success_rate = (bull_count + bear_count) / len(results) * 100
-        st.success(f"✅ Analysis completed! Success rate: {success_rate:.1f}%")
+        st.success(f"✅ Analysis completed with Unified Model! Success rate: {success_rate:.1f}%")
+        
+        # 통합 모델 상태 정보
+        st.markdown(f"""
+        <div class="unified-model">
+            <strong>🔧 Unified Model Analysis Summary</strong><br>
+            📊 Assets analyzed with unified model: {unified_model_count}/{len(results)}<br>
+            📈 Feature type distribution: {paper_features_count} Paper Features, {enhanced_features_count} Enhanced Features<br>
+            🎯 Jump Penalty used: {st.session_state.jump_penalty}
+        </div>
+        """, unsafe_allow_html=True)
     
     def _display_backtest_results(self):
         """백테스트 결과 표시"""
@@ -965,7 +1036,7 @@ class StreamlinedRealtimeDashboard:
         data = st.session_state.portfolio_data
         
         # 백테스트 정보
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Jump Model", "Enabled" if data.get('use_jump_model', False) else "Disabled")
         with col2:
@@ -973,6 +1044,9 @@ class StreamlinedRealtimeDashboard:
             st.metric("Risk-Free Rate", rf_status)
         with col3:
             st.metric("Training Cutoff", data.get('training_cutoff', 'N/A'))
+        with col4:
+            unified_status = "✅ Yes" if data.get('unified_model_used', False) else "❌ No"
+            st.metric("Unified Model", unified_status)
         
         # 성과 지표
         metrics = data.get('metrics', {})
@@ -995,11 +1069,11 @@ class StreamlinedRealtimeDashboard:
                 x=portfolio_df.index,
                 y=portfolio_df['value'],
                 mode='lines',
-                name='Portfolio Value',
+                name='Portfolio Value (Unified Model)',
                 line=dict(color='blue', width=2)
             ))
             fig.update_layout(
-                title="Portfolio Value Over Time",
+                title="Portfolio Value Over Time (Unified Model)",
                 xaxis_title="Date",
                 yaxis_title="Value",
                 height=400
@@ -1038,8 +1112,8 @@ class StreamlinedRealtimeDashboard:
             index=3
         )
         
-        if st.button("📊 Analyze Dynamic RF Data", type="primary"):
-            with st.spinner("Analyzing ^IRX Risk-Free Rate data..."):
+        if st.button("📊 Analyze Dynamic RF Data (Unified Model)", type="primary"):
+            with st.spinner("Analyzing ^IRX Risk-Free Rate data with unified model..."):
                 self._analyze_rf_data(selected_days)
     
     def _analyze_rf_data(self, days):
@@ -1072,13 +1146,13 @@ class StreamlinedRealtimeDashboard:
                     x=rf_data.index,
                     y=rf_data.values * 100,
                     mode='lines',
-                    name='Risk-Free Rate (^IRX)',
+                    name='Risk-Free Rate (^IRX) - Unified Model',
                     line=dict(color='blue', width=2)
                 ))
                 fig_rf.add_hline(y=stats['mean_rate'], line_dash="dash", 
                                line_color="red", annotation_text=f"Average: {stats['mean_rate']:.3f}%")
                 fig_rf.update_layout(
-                    title="^IRX Risk-Free Rate Trend",
+                    title="^IRX Risk-Free Rate Trend (Unified Model)",
                     xaxis_title="Date",
                     yaxis_title="Rate (%)",
                     height=400
@@ -1093,55 +1167,57 @@ class StreamlinedRealtimeDashboard:
     
     def _display_investment_implications(self, current_rate):
         """투자 시사점 표시"""
-        st.subheader("💡 Investment Implications")
+        st.subheader("💡 Investment Implications (Unified Model)")
         
         if current_rate > 4.0:
             st.error(f"🔴 **High RF Environment** ({current_rate:.2f}%)")
             st.markdown("""
             - **Cash becomes attractive**: High opportunity cost for risky assets
             - **Strategy**: Consider conservative positioning, high-quality assets
+            - **Unified Model**: Jump penalty may increase regime stability
             """)
         elif current_rate < 1.0:
             st.success(f"🟢 **Low RF Environment** ({current_rate:.2f}%)")
             st.markdown("""
             - **Risk asset friendly**: Low opportunity cost encourages risk-taking
             - **Strategy**: Consider aggressive positioning, growth assets
+            - **Unified Model**: Feature calculations optimized for low RF environment
             """)
         else:
             st.info(f"🟡 **Normal RF Environment** ({current_rate:.2f}%)")
             st.markdown("""
             - **Balanced outlook**: Moderate opportunity cost for risky assets
             - **Strategy**: Maintain balanced portfolio allocation
+            - **Unified Model**: Standard feature calculations apply
             """)
     
     def _update_data(self):
         """데이터 업데이트"""
         try:
             st.session_state.last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            st.success("✅ Data updated successfully!")
+            st.success("✅ Data updated successfully! (Unified Model)")
         except Exception as e:
             st.error(f"Update failed: {str(e)}")
     
     def _run_backtest(self):
-        """백테스트 실행"""
+        """백테스트 실행 - 통합 모델"""
         preset = st.session_state.selected_preset
-        params = st.session_state.strategy_params
         
-        with st.spinner('Running backtest...'):
+        with st.spinner('Running backtest with unified model...'):
             try:
                 strategy = UniversalRSWithJumpModel(
                     preset_config=preset,
-                    rs_length=params['rs_length'],
-                    rs_timeframe=params['timeframe'],
-                    rs_recent_cross_days=params['cross_days'],
-                    use_jump_model=params['use_jump'],
+                    rs_length=20,
+                    rs_timeframe='daily',
+                    rs_recent_cross_days=30,
+                    use_jump_model=True,
                     rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                     default_rf_rate=st.session_state.default_rf_rate,
                     training_cutoff_date=datetime(2024, 12, 31)
                 )
                 
                 end_date = datetime.now()
-                start_date = end_date - timedelta(days=365*params['backtest_years'])
+                start_date = end_date - timedelta(days=365*3)  # 3년
                 
                 portfolio_df, trades_df, regime_df = strategy.backtest(start_date, end_date)
                 
@@ -1151,12 +1227,15 @@ class StreamlinedRealtimeDashboard:
                         'trades': trades_df,
                         'regime': regime_df,
                         'metrics': strategy.calculate_performance_metrics(portfolio_df),
-                        'use_jump_model': params['use_jump'],
-                        'training_cutoff': '2024-12-31' if params['use_jump'] else 'N/A',
+                        'use_jump_model': True,
+                        'training_cutoff': '2024-12-31',
                         'rf_ticker': st.session_state.rf_ticker,
-                        'dynamic_rf_used': st.session_state.use_dynamic_rf and HAS_RF_UTILS
+                        'dynamic_rf_used': st.session_state.use_dynamic_rf and HAS_RF_UTILS,
+                        'unified_model_used': True,  # 통합 모델 사용 표시
+                        'feature_type': '논문 정확한 3특징' if st.session_state.use_paper_features_only else '논문 기반 + 추가',
+                        'jump_penalty': st.session_state.jump_penalty
                     }
-                    st.success("✅ Backtest completed!")
+                    st.success("✅ Backtest completed with unified model!")
                 else:
                     st.error("❌ Backtest failed - no results generated")
                     
@@ -1169,7 +1248,7 @@ class StreamlinedRealtimeDashboard:
         """체제 새로고침"""
         st.session_state.regime_cache = {}
         st.session_state.cache_timestamp = None
-        st.success("✅ Regime cache cleared!")
+        st.success("✅ Regime cache cleared! (Unified Model)")
     
     def _download_results(self):
         """결과 다운로드"""
@@ -1180,9 +1259,9 @@ class StreamlinedRealtimeDashboard:
                     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                     csv = portfolio_df.to_csv()
                     st.download_button(
-                        label="📥 Download Portfolio Data",
+                        label="📥 Download Portfolio Data (Unified Model)",
                         data=csv,
-                        file_name=f"portfolio_{timestamp}.csv",
+                        file_name=f"portfolio_unified_{timestamp}.csv",
                         mime="text/csv"
                     )
             else:
@@ -1196,12 +1275,12 @@ class StreamlinedRealtimeDashboard:
         for key in keys_to_clear:
             if key in st.session_state:
                 st.session_state[key] = None if key in ['portfolio_data', 'last_update'] else {}
-        st.success("✅ Cache cleared!")
+        st.success("✅ Cache cleared! (Unified Model)")
 
 def main():
     """메인 함수"""
     try:
-        dashboard = StreamlinedRealtimeDashboard()
+        dashboard = UnifiedRealtimeDashboard()
         dashboard.run()
     except Exception as e:
         st.error(f"🚨 Dashboard initialization failed: {str(e)}")
