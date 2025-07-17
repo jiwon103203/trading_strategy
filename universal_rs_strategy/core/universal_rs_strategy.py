@@ -6,7 +6,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from utils import safe_extract_close, validate_data, calculate_wma, calculate_basic_metrics, print_status
+from trading_strategy.universal_rs_strategy.core.utils import safe_extract_close, validate_data, calculate_wma, calculate_basic_metrics, print_status
 import warnings
 warnings.filterwarnings('ignore')
 

@@ -1,15 +1,15 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from ..core.universal_rs_strategy import UniversalRSStrategy
-from ..core.universal_jump_model import UniversalJumpModel
-from ..core.utils import safe_float, safe_extract_close, validate_data, calculate_basic_metrics, print_status
+from trading_strategy.universal_rs_strategy.core.universal_rs_strategy import UniversalRSStrategy
+from trading_strategy.universal_rs_strategy.core.universal_jump_model import UniversalJumpModel
+from trading_strategy.universal_rs_strategy.core.utils import safe_float, safe_extract_close, validate_data, calculate_basic_metrics, print_status
 import warnings
 warnings.filterwarnings('ignore')
 
 # Risk-free rate 유틸리티 import
 try:
-    from ..advanced.risk_free_rate_utils import RiskFreeRateManager, calculate_dynamic_sharpe_ratio, calculate_dynamic_sortino_ratio
+    from trading_strategy.universal_rs_strategy.advanced.risk_free_rate_utils import RiskFreeRateManager, calculate_dynamic_sharpe_ratio, calculate_dynamic_sortino_ratio
     HAS_RF_UTILS = True
 except ImportError:
     print_status("risk_free_rate_utils.py가 없습니다. 기본 risk-free rate (2%) 사용", "WARNING")
