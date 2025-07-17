@@ -1,6 +1,6 @@
 """
-범용 RS 모멘텀 전략 + Jump Model + 동적 Risk-Free Rate
-메인 실행 스크립트
+범용 RS 모멘텀 전략 + 통합 Jump Model + 동적 Risk-Free Rate
+메인 실행 스크립트 - 통합된 특징 계산 코드 사용
 """
 
 import pandas as pd
@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from preset_manager import PresetManager
 from universal_rs_strategy import UniversalRSStrategy
-from universal_jump_model import UniversalJumpModel
+from universal_jump_model import UniversalJumpModel  # 통합된 모델 사용
 from universal_rs_with_jump import UniversalRSWithJumpModel
 import warnings
 warnings.filterwarnings('ignore')
@@ -43,12 +43,16 @@ plt.rcParams['axes.unicode_minus'] = False
 
 
 class UniversalStrategyRunner:
-    """범용 전략 실행기 - 동적 Risk-Free Rate 지원"""
+    """범용 전략 실행기 - 통합 Jump Model + 동적 Risk-Free Rate 지원"""
     
     def __init__(self):
         self.current_preset = None
         self.rf_ticker = '^IRX'  # 기본 Risk-Free Rate 티커
         self.default_rf_rate = 0.02  # 기본 2%
+        
+        # 통합 모델 설정
+        self.use_paper_features_only = True  # 통합 모델 기본값
+        self.jump_penalty = 50.0  # 통합 모델 기본값
         
         self.presets = {
             1: PresetManager.get_sp500_sectors(),
@@ -68,20 +72,55 @@ class UniversalStrategyRunner:
     def print_menu(self):
         """메뉴 출력"""
         print("\n" + "="*80)
-        print("범용 RS 모멘텀 전략 + Jump Model + 동적 Risk-Free Rate 시스템")
+        print("범용 RS 모멘텀 전략 + 통합 Jump Model + 동적 Risk-Free Rate 시스템")
         print("="*80)
         print("1. 프리셋 선택 및 현재 시장 상태 확인")
-        print("2. Jump Model 체제 분석 (동적 RF)")
-        print("3. 백테스트 실행 (Jump Model + 동적 RF)")
-        print("4. 전략 성과 비교 (동적 RF)")
+        print("2. 통합 Jump Model 체제 분석 (동적 RF)")
+        print("3. 백테스트 실행 (통합 Model + 동적 RF)")
+        print("4. 전략 성과 비교 (통합 Model)")
         print("5. 실시간 신호 대시보드")
         print("6. 사용자 정의 전략 생성")
         print("7. Risk-Free Rate 설정")
-        print("8. 동적 RF 성과 분석")
-        print("9. 종료")
+        print("8. 통합 모델 설정")
+        print("9. 동적 RF 성과 분석")
+        print("10. 종료")
         print("="*80)
         rf_status = "📊 동적" if HAS_RF_UTILS else "📌 고정"
-        print(f"현재 Risk-Free Rate: {self.rf_ticker} ({rf_status})")
+        feature_type = "📊 3특징" if self.use_paper_features_only else "📈 확장특징"
+        print(f"현재 설정: RF={self.rf_ticker} ({rf_status}) | Features={feature_type} | Jump Penalty={self.jump_penalty}")
+    
+    def configure_unified_model(self):
+        """통합 모델 설정"""
+        print("\n=== 통합 Jump Model 설정 ===")
+        print(f"현재 설정: {'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가 특징'}")
+        print(f"Jump Penalty: {self.jump_penalty}")
+        
+        print("\nFeature Type 선택:")
+        print("1. 논문 정확한 3특징 (권장)")
+        print("2. 논문 기반 + 추가 특징")
+        
+        choice = input("선택 (1-2, 엔터=현재 유지): ")
+        
+        if choice == '1':
+            self.use_paper_features_only = True
+            print("✅ 논문 정확한 3특징으로 설정되었습니다.")
+        elif choice == '2':
+            self.use_paper_features_only = False
+            print("✅ 논문 기반 + 추가 특징으로 설정되었습니다.")
+        
+        # Jump Penalty 설정
+        new_penalty = input(f"Jump Penalty 설정 (현재: {self.jump_penalty}, 엔터=유지): ")
+        if new_penalty:
+            try:
+                self.jump_penalty = float(new_penalty)
+                print(f"✅ Jump Penalty가 {self.jump_penalty}로 설정되었습니다.")
+            except:
+                print("❌ 잘못된 입력입니다.")
+        
+        print(f"\n현재 통합 모델 설정:")
+        print(f"  - Feature Type: {'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가 특징'}")
+        print(f"  - Jump Penalty: {self.jump_penalty}")
+        print(f"  - Training Cutoff: 2024-12-31 (고정)")
     
     def select_preset(self):
         """프리셋 선택"""
@@ -137,7 +176,7 @@ class UniversalStrategyRunner:
             return
         
         print("\n사용 가능한 Risk-Free Rate 티커:")
-        print("1. ^IRX (미국 3개월물 국채)")
+        print("1. ^IRX (미국 3개월물 국채) - 권장")
         print("2. ^TNX (미국 10년물 국채)")
         print("3. ^FVX (미국 5년물 국채)")
         print("4. 사용자 정의")
@@ -175,20 +214,23 @@ class UniversalStrategyRunner:
                 print(f"⚠️ 테스트 실패: {e}")
     
     def check_current_status(self):
-        """현재 시장 상태 확인 (동적 RF 지원)"""
+        """현재 시장 상태 확인 (통합 모델 + 동적 RF 지원)"""
         if not self.current_preset:
             self.select_preset()
         
         if not self.current_preset:
             return
         
-        print(f"\n{self.current_preset['name']} 현재 상태 분석 중...")
+        print(f"\n{self.current_preset['name']} 현재 상태 분석 중... (통합 모델)")
+        print(f"설정: Feature={'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}, Jump Penalty={self.jump_penalty}")
         print(f"Risk-Free Rate: {self.rf_ticker}")
         
-        # Jump Model로 체제 확인 (동적 RF 사용)
+        # 통합 Jump Model로 체제 확인
         jump_model = UniversalJumpModel(
             benchmark_ticker=self.current_preset['benchmark'],
             benchmark_name=self.current_preset['name'],
+            use_paper_features_only=self.use_paper_features_only,
+            jump_penalty=self.jump_penalty,
             rf_ticker=self.rf_ticker,
             default_rf_rate=self.default_rf_rate,
             training_cutoff_date=datetime(2024, 12, 31)
@@ -199,10 +241,12 @@ class UniversalStrategyRunner:
         if current_regime:
             oos_status = "🔮 Out-of-Sample" if current_regime['is_out_of_sample'] else "📚 In-Sample"
             rf_status = "📊 동적" if current_regime['dynamic_rf_used'] else "📌 고정"
+            feature_type = current_regime.get('feature_type', 'Unknown')
             
             print(f"\n시장 체제: {current_regime['regime']} (신뢰도: {current_regime['confidence']:.2%})")
             print(f"분석 상태: {oos_status}")
             print(f"Risk-Free Rate: {rf_status} ({current_regime['current_rf_rate']:.3f}%)")
+            print(f"Feature Type: {feature_type}")
             print(f"기준일: {current_regime['date'].strftime('%Y-%m-%d')}")
         
         # RS 신호 확인
@@ -244,7 +288,7 @@ class UniversalStrategyRunner:
             print(f"\n{current_regime['regime']} 체제 - 투자 중단 권고")
     
     def analyze_regime(self):
-        """Jump Model 체제 분석 (동적 RF 지원)"""
+        """통합 Jump Model 체제 분석 (동적 RF 지원)"""
         if not self.current_preset:
             self.select_preset()
         
@@ -259,9 +303,12 @@ class UniversalStrategyRunner:
         choice = input("선택 (1-3): ")
         years = {'1': 1, '2': 3, '3': 5}.get(choice, 3)
         
+        # 통합 Jump Model 사용
         jump_model = UniversalJumpModel(
             benchmark_ticker=self.current_preset['benchmark'],
             benchmark_name=self.current_preset['name'],
+            use_paper_features_only=self.use_paper_features_only,
+            jump_penalty=self.jump_penalty,
             rf_ticker=self.rf_ticker,
             default_rf_rate=self.default_rf_rate,
             training_cutoff_date=datetime(2024, 12, 31)
@@ -270,35 +317,50 @@ class UniversalStrategyRunner:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=365*years)
         
-        print(f"\n{self.current_preset['name']} 체제 분석 중...")
+        print(f"\n{self.current_preset['name']} 체제 분석 중... (통합 모델)")
+        print(f"설정: Feature={'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}")
+        print(f"Jump Penalty: {self.jump_penalty}")
         print(f"Risk-Free Rate: {self.rf_ticker}")
         
-        stats = jump_model.get_regime_statistics(start_date, end_date)
+        # 현재 체제만 분석 (간단한 버전)
+        current_regime = jump_model.get_current_regime_with_training_cutoff()
         
-        if stats:
-            print(f"\n=== {self.current_preset['name']} 체제 통계 ({years}년) ===")
+        if current_regime:
+            print(f"\n=== {self.current_preset['name']} 현재 체제 분석 ===")
             
             # Risk-Free Rate 정보
-            rf_info = stats.get('risk_free_rate', {})
-            if rf_info.get('dynamic_used', False):
-                print(f"\nRisk-Free Rate ({rf_info['ticker']}):")
-                print(f"  - 평균: {rf_info['avg_rate']:.3f}%")
-                print(f"  - 범위: {rf_info['min_rate']:.3f}% ~ {rf_info['max_rate']:.3f}%")
-                print(f"  - 표준편차: {rf_info['std_rate']:.3f}%")
+            if current_regime.get('dynamic_rf_used', False):
+                current_rf = current_regime.get('current_rf_rate', 0)
+                print(f"\nRisk-Free Rate (동적 - {current_regime.get('rf_ticker', self.rf_ticker)}):")
+                print(f"  - 현재: {current_rf:.3f}%")
+                print(f"  - 30일 평균: {current_regime.get('avg_rf_rate_30d', current_rf):.3f}%")
             else:
-                print(f"\nRisk-Free Rate: {rf_info['avg_rate']:.1f}% (고정)")
+                print(f"\nRisk-Free Rate: {self.default_rf_rate*100:.1f}% (고정)")
             
-            # 체제별 통계
-            for regime, data in stats.items():
-                if regime != 'risk_free_rate':
-                    print(f"\n{regime}:")
-                    print(f"  - 총 기간: {data['total_days']}일 ({data['percentage']:.1f}%)")
-                    print(f"  - 평균 지속: {data['avg_duration']:.0f}일")
-                    print(f"  - 최대 지속: {data['max_duration']}일")
-                    print(f"  - 전환 횟수: {data['transitions']}회")
+            # 체제 정보
+            regime = current_regime['regime']
+            confidence = current_regime['confidence']
+            oos_status = "Out-of-Sample" if current_regime.get('is_out_of_sample', False) else "In-Sample"
+            feature_type = current_regime.get('feature_type', 'Unknown')
+            
+            print(f"\n현재 체제:")
+            print(f"  - 체제: {regime}")
+            print(f"  - 신뢰도: {confidence:.2%}")
+            print(f"  - 상태: {oos_status}")
+            print(f"  - Feature Type: {feature_type}")
+            print(f"  - 분석일: {current_regime['date'].strftime('%Y-%m-%d')}")
+            
+            # 특징값 표시
+            features = current_regime.get('features', {})
+            if features:
+                print(f"\n특징값:")
+                for key, value in features.items():
+                    print(f"  - {key}: {value:.6f}")
+        else:
+            print("❌ 체제 분석 실패")
     
     def run_backtest(self):
-        """백테스트 실행 (동적 RF 지원)"""
+        """백테스트 실행 (통합 모델 + 동적 RF 지원)"""
         if not self.current_preset:
             self.select_preset()
         
@@ -314,11 +376,9 @@ class UniversalStrategyRunner:
         use_cross = input("최근 크로스 필터링 사용? (y/n) [기본: n]: ") or "n"
         cross_days = int(input("크로스 기간 (일) [기본: 30]: ") or "30") if use_cross.lower() == 'y' else None
         
-        # Jump Model 설정
-        use_jump = input("Jump Model 사용? (y/n) [기본: y]: ") or "y"
+        # 통합 Jump Model 설정
+        use_jump = input("통합 Jump Model 사용? (y/n) [기본: y]: ") or "y"
         use_jump = use_jump.lower() == 'y'
-        
-        jump_penalty = float(input("Jump Penalty [기본: 50]: ") or "50") if use_jump else 50.0
         
         # 백테스트 기간
         print("\n백테스트 기간:")
@@ -345,17 +405,20 @@ class UniversalStrategyRunner:
         initial_capital = float(input("초기 자본 [기본: 10,000,000]: ") or "10000000")
         
         # 전략 생성 및 백테스트
-        print(f"\n백테스트 실행 중...")
+        print(f"\n백테스트 실행 중... (통합 모델)")
         print(f"전략: {self.current_preset['name']}")
         print(f"기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
+        print(f"설정: Feature={'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}")
+        print(f"Jump Penalty: {self.jump_penalty}")
         print(f"Risk-Free Rate: {self.rf_ticker}")
         
         strategy = UniversalRSWithJumpModel(
             preset_config=self.current_preset,
             rs_timeframe=timeframe,
             rs_recent_cross_days=cross_days,
-            jump_penalty=jump_penalty,
+            jump_penalty=self.jump_penalty,
             use_jump_model=use_jump,
+            use_paper_features_only=self.use_paper_features_only,
             rf_ticker=self.rf_ticker,
             default_rf_rate=self.default_rf_rate,
             training_cutoff_date=datetime(2024, 12, 31)
@@ -367,7 +430,7 @@ class UniversalStrategyRunner:
             # 성과 출력
             metrics = strategy.calculate_performance_metrics(portfolio_df)
             
-            print("\n=== 백테스트 결과 (동적 Risk-Free Rate) ===")
+            print("\n=== 백테스트 결과 (통합 모델 + 동적 Risk-Free Rate) ===")
             for key, value in metrics.items():
                 print(f"{key}: {value}")
             
@@ -388,9 +451,9 @@ class UniversalStrategyRunner:
             if save_choice.lower() == 'y':
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 strategy_name = self.current_preset['name'].replace(' ', '_').lower()
-                portfolio_df.to_csv(f'portfolio_{strategy_name}_{timestamp}.csv')
+                portfolio_df.to_csv(f'portfolio_unified_{strategy_name}_{timestamp}.csv')
                 if not trades_df.empty:
-                    trades_df.to_csv(f'trades_{strategy_name}_{timestamp}.csv')
+                    trades_df.to_csv(f'trades_unified_{strategy_name}_{timestamp}.csv')
                 print("저장 완료!")
     
     def dynamic_rf_performance_analysis(self):
@@ -399,7 +462,7 @@ class UniversalStrategyRunner:
             print("동적 Risk-Free Rate 분석을 위해서는 risk_free_rate_utils.py가 필요합니다.")
             return
         
-        print("\n=== 동적 Risk-Free Rate 성과 분석 ===")
+        print("\n=== 동적 Risk-Free Rate 성과 분석 (통합 모델) ===")
         
         # 여러 RF 티커 비교
         rf_tickers = ['^IRX', '^TNX', '^FVX']
@@ -447,7 +510,7 @@ class UniversalStrategyRunner:
                     print(f"  {name} 기준 - 계산 실패")
         
         # RF 변화가 성과에 미치는 영향 시뮬레이션
-        print(f"\n=== Risk-Free Rate 변화 영향 분석 ===")
+        print(f"\n=== Risk-Free Rate 변화 영향 분석 (통합 모델) ===")
         
         base_return = 10.0  # 10% 연간 수익률
         volatility = 15.0   # 15% 연간 변동성
@@ -458,11 +521,14 @@ class UniversalStrategyRunner:
         for rf in rf_scenarios:
             sharpe = (base_return - rf) / volatility
             print(f"  RF {rf:.1f}%: Sharpe {sharpe:.3f}")
+        
+        print(f"\n통합 모델 설정에서는 Jump Penalty {self.jump_penalty}로 인해")
+        print(f"RF 변화에 대한 체제 전환이 {'안정적' if self.jump_penalty >= 50 else '민감'}으로 반응합니다.")
     
     def visualize_results(self, portfolio_df, trades_df, strategy_name):
-        """결과 시각화 (동적 RF 정보 포함)"""
+        """결과 시각화 (통합 모델 + 동적 RF 정보 포함)"""
         fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-        fig.suptitle(f'{strategy_name} 백테스트 결과 (동적 RF: {self.rf_ticker})', fontsize=16)
+        fig.suptitle(f'{strategy_name} 백테스트 결과 (통합 모델 + 동적 RF: {self.rf_ticker})', fontsize=16)
         
         # 1. 포트폴리오 가치
         ax1 = axes[0, 0]
@@ -503,17 +569,18 @@ class UniversalStrategyRunner:
             ax4.legend()
         else:
             ax4.plot(portfolio_df.index, portfolio_df['value'], linewidth=2)
-        ax4.set_title('체제별 포트폴리오 가치')
+        ax4.set_title('체제별 포트폴리오 가치 (통합 모델)')
         ax4.set_ylabel('가치')
         ax4.grid(True, alpha=0.3)
         
-        # Risk-Free Rate 정보 추가
-        if HAS_RF_UTILS:
-            fig.text(0.02, 0.02, f'동적 Risk-Free Rate: {self.rf_ticker}', 
-                    fontsize=10, style='italic')
+        # 통합 모델 정보 추가
+        fig.text(0.02, 0.02, 
+                f'통합 Jump Model: Feature={"3특징" if self.use_paper_features_only else "확장"}, '
+                f'Jump Penalty={self.jump_penalty}, RF={self.rf_ticker}', 
+                fontsize=10, style='italic')
         
         plt.tight_layout()
-        plt.savefig(f'{strategy_name.replace(" ", "_").lower()}_results_dynamic_rf.png', 
+        plt.savefig(f'{strategy_name.replace(" ", "_").lower()}_results_unified_model.png', 
                    dpi=300, bbox_inches='tight')
         plt.show()
     
@@ -545,8 +612,8 @@ class UniversalStrategyRunner:
             print("구성요소가 없어 전략을 생성하지 않았습니다.")
     
     def compare_strategies(self):
-        """전략 성과 비교 (동적 RF 지원)"""
-        print("\n=== 전략 성과 비교 (동적 Risk-Free Rate) ===")
+        """전략 성과 비교 (통합 모델 + 동적 RF 지원)"""
+        print("\n=== 전략 성과 비교 (통합 모델 + 동적 Risk-Free Rate) ===")
         
         # 첫 번째 전략
         print("\n첫 번째 전략 선택:")
@@ -566,20 +633,24 @@ class UniversalStrategyRunner:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=365*years)
         
-        print(f"\n백테스트 실행 중... (Risk-Free Rate: {self.rf_ticker})")
+        print(f"\n백테스트 실행 중... (통합 모델)")
+        print(f"설정: Feature={'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}")
+        print(f"Jump Penalty: {self.jump_penalty}")
+        print(f"Risk-Free Rate: {self.rf_ticker}")
         
         results = {}
         
         # 두 전략 백테스트
         for i, preset in enumerate([preset1, preset2], 1):
-            print(f"\n{i}. {preset['name']} 백테스트...")
+            print(f"\n{i}. {preset['name']} 백테스트... (통합 모델)")
             
             strategy = UniversalRSWithJumpModel(
                 preset_config=preset,
                 rs_timeframe='daily',
                 rs_recent_cross_days=30,
-                jump_penalty=50.0,
+                jump_penalty=self.jump_penalty,
                 use_jump_model=True,
+                use_paper_features_only=self.use_paper_features_only,
                 rf_ticker=self.rf_ticker,
                 default_rf_rate=self.default_rf_rate,
                 training_cutoff_date=datetime(2024, 12, 31)
@@ -599,23 +670,24 @@ class UniversalStrategyRunner:
             self.display_comparison(results)
     
     def display_comparison(self, results):
-        """전략 비교 결과 표시 (동적 RF 정보 포함)"""
-        print(f"\n=== 전략 비교 결과 (동적 RF: {self.rf_ticker}) ===")
+        """전략 비교 결과 표시 (통합 모델 + 동적 RF 정보 포함)"""
+        print(f"\n=== 전략 비교 결과 (통합 모델 + 동적 RF: {self.rf_ticker}) ===")
         
         # 테이블 형식으로 출력
         strategies = list(results.keys())
-        print(f"\n{'지표':<25} {strategies[0]:<35} {strategies[1]:<35}")
-        print("-" * 95)
+        print(f"\n{'지표':<30} {strategies[0]:<35} {strategies[1]:<35}")
+        print("-" * 100)
         
         metrics_to_compare = [
             '총 수익률', '연율화 수익률', '연율화 변동성', 
-            '샤프 비율 (동적)', '소르티노 비율 (동적)', '평균 Risk-Free Rate'
+            '샤프 비율 (동적)', '소르티노 비율 (동적)', '평균 Risk-Free Rate',
+            '통합 모델 사용', 'Feature Type', 'Jump Penalty'
         ]
         
         for metric in metrics_to_compare:
             val1 = results[strategies[0]]['metrics'].get(metric, 'N/A')
             val2 = results[strategies[1]]['metrics'].get(metric, 'N/A')
-            print(f"{metric:<25} {str(val1):<35} {str(val2):<35}")
+            print(f"{metric:<30} {str(val1):<35} {str(val2):<35}")
         
         # 시각화
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
@@ -625,7 +697,7 @@ class UniversalStrategyRunner:
             ax1.plot(data['portfolio'].index, data['portfolio']['value'], 
                     label=strategy, linewidth=2)
         ax1.set_ylabel('포트폴리오 가치')
-        ax1.set_title(f'전략별 포트폴리오 가치 추이 (동적 RF: {self.rf_ticker})')
+        ax1.set_title(f'전략별 포트폴리오 가치 추이 (통합 모델 + 동적 RF: {self.rf_ticker})')
         ax1.legend()
         ax1.grid(True, alpha=0.3)
         
@@ -645,25 +717,35 @@ class UniversalStrategyRunner:
             ax2.set_title(f'{strategies[1]} vs {strategies[0]} 상대 성과')
             ax2.grid(True, alpha=0.3)
         
+        # 통합 모델 정보 추가
+        fig.text(0.02, 0.02, 
+                f'통합 Jump Model: Feature={"3특징" if self.use_paper_features_only else "확장"}, '
+                f'Jump Penalty={self.jump_penalty}', 
+                fontsize=10, style='italic')
+        
         plt.tight_layout()
-        plt.savefig('strategy_comparison_dynamic_rf.png', dpi=300, bbox_inches='tight')
+        plt.savefig('strategy_comparison_unified_model.png', dpi=300, bbox_inches='tight')
         plt.show()
     
     def create_dashboard(self):
-        """실시간 대시보드 (동적 RF 지원)"""
+        """실시간 대시보드 (통합 모델 + 동적 RF 지원)"""
         if not self.current_preset:
             self.select_preset()
         
         if not self.current_preset:
             return
         
-        print(f"\n{self.current_preset['name']} 대시보드 생성 중...")
+        print(f"\n{self.current_preset['name']} 대시보드 생성 중... (통합 모델)")
+        print(f"설정: Feature={'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}")
+        print(f"Jump Penalty: {self.jump_penalty}")
         print(f"Risk-Free Rate: {self.rf_ticker}")
         
-        # Jump Model (동적 RF 사용)
+        # 통합 Jump Model (동적 RF 사용)
         jump_model = UniversalJumpModel(
             benchmark_ticker=self.current_preset['benchmark'],
             benchmark_name=self.current_preset['name'],
+            use_paper_features_only=self.use_paper_features_only,
+            jump_penalty=self.jump_penalty,
             rf_ticker=self.rf_ticker,
             default_rf_rate=self.default_rf_rate,
             training_cutoff_date=datetime(2024, 12, 31)
@@ -694,7 +776,7 @@ class UniversalStrategyRunner:
             fig = plt.figure(figsize=(16, 12))
             gs = fig.add_gridspec(4, 3, hspace=0.4, wspace=0.3)
             
-            # 1. 현재 체제 + RF 정보
+            # 1. 현재 체제 + RF 정보 + 통합 모델 정보
             ax1 = fig.add_subplot(gs[0, :])
             ax1.axis('off')
             
@@ -702,113 +784,28 @@ class UniversalStrategyRunner:
                 regime_color = 'green' if current_regime['regime'] == 'BULL' else 'red'
                 oos_status = "🔮 Out-of-Sample" if current_regime['is_out_of_sample'] else "📚 In-Sample"
                 rf_status = "📊 동적" if current_regime['dynamic_rf_used'] else "📌 고정"
+                feature_type = current_regime.get('feature_type', 'Unknown')
                 
-                regime_text = f"""{self.current_preset['name']}
+                regime_text = f"""{self.current_preset['name']} (통합 모델)
 현재 체제: {current_regime['regime']} (신뢰도: {current_regime['confidence']:.2%})
 분석 상태: {oos_status}
-Risk-Free Rate: {rf_status} ({current_regime['current_rf_rate']:.3f}%)"""
+Risk-Free Rate: {rf_status} ({current_regime['current_rf_rate']:.3f}%)
+Feature Type: {feature_type}
+Jump Penalty: {self.jump_penalty}"""
                 
                 ax1.text(0.5, 0.5, regime_text, fontsize=16, fontweight='bold',
                         ha='center', va='center', color=regime_color,
                         bbox=dict(boxstyle="round,pad=0.5", facecolor='white', 
                                 edgecolor=regime_color, linewidth=3))
             
-            # 2. 투자 가능 구성요소
-            ax2 = fig.add_subplot(gs[1, :])
-            if selected and current_regime and current_regime['regime'] == 'BULL':
-                components = [s['name'] for s in selected[:10]]
-                rs_ratios = [s['rs_ratio'] for s in selected[:10]]
-                rs_momentums = [s['rs_momentum'] for s in selected[:10]]
-                
-                x = np.arange(len(components))
-                width = 0.35
-                
-                ax2.bar(x - width/2, np.array(rs_ratios) - 100, width, 
-                       label='RS-Ratio', alpha=0.8)
-                ax2.bar(x + width/2, np.array(rs_momentums) - 100, width, 
-                       label='RS-Momentum', alpha=0.8)
-                
-                ax2.set_xlabel('구성요소')
-                ax2.set_ylabel('100 대비 초과 수준')
-                ax2.set_title(f'투자 가능 구성요소 TOP 10 (총 {len(selected)}개)')
-                ax2.set_xticks(x)
-                ax2.set_xticklabels(components, rotation=45, ha='right')
-                ax2.legend()
-                ax2.grid(True, alpha=0.3, axis='y')
-                ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-            else:
-                ax2.text(0.5, 0.5, '투자 가능 구성요소 없음' if current_regime and current_regime['regime'] == 'BEAR' else '데이터 없음',
-                        fontsize=16, ha='center', va='center')
-                ax2.set_title('투자 가능 구성요소')
-            
-            # 3. 최근 체제 변화
-            ax3 = fig.add_subplot(gs[2, :])
-            recent_regime = jump_model.get_regime_history(
-                end_date - timedelta(days=90), end_date
-            )
-            
-            if recent_regime is not None:
-                dates = recent_regime.index
-                regimes = recent_regime['regime'].map({'BULL': 1, 'BEAR': 0})
-                
-                ax3.fill_between(dates, 0, regimes, where=(regimes == 1), 
-                               color='green', alpha=0.3, label='BULL')
-                ax3.fill_between(dates, 0, regimes, where=(regimes == 0), 
-                               color='red', alpha=0.3, label='BEAR')
-                ax3.plot(dates, regimes, 'k-', linewidth=2)
-                
-                ax3.set_ylim(-0.1, 1.1)
-                ax3.set_yticks([0, 1])
-                ax3.set_yticklabels(['BEAR', 'BULL'])
-                ax3.set_xlabel('날짜')
-                ax3.set_title('최근 90일 체제 변화')
-                ax3.legend()
-                ax3.grid(True, alpha=0.3)
-            
-            # 4. Risk-Free Rate 추이 (동적 RF인 경우)
-            ax4 = fig.add_subplot(gs[3, :])
-            if HAS_RF_UTILS and current_regime and current_regime['dynamic_rf_used']:
-                try:
-                    rf_manager = RiskFreeRateManager(self.rf_ticker, self.default_rf_rate)
-                    rf_data = rf_manager.download_risk_free_rate(
-                        end_date - timedelta(days=180), end_date
-                    )
-                    
-                    if rf_data is not None and not rf_data.empty:
-                        ax4.plot(rf_data.index, rf_data * 100, linewidth=2, color='blue')
-                        ax4.set_title(f'Risk-Free Rate 추이 ({self.rf_ticker})')
-                        ax4.set_ylabel('금리 (%)')
-                        ax4.set_xlabel('날짜')
-                        ax4.grid(True, alpha=0.3)
-                        
-                        # 현재 금리 표시
-                        current_rf = rf_data.iloc[-1] * 100
-                        ax4.axhline(y=current_rf, color='red', linestyle='--', alpha=0.7)
-                        ax4.text(rf_data.index[-1], current_rf + 0.1, 
-                               f'현재: {current_rf:.3f}%', 
-                               ha='right', va='bottom', color='red')
-                    else:
-                        ax4.text(0.5, 0.5, 'RF 데이터 없음', ha='center', va='center')
-                        ax4.set_title(f'Risk-Free Rate 추이 ({self.rf_ticker})')
-                except Exception as e:
-                    ax4.text(0.5, 0.5, f'RF 데이터 오류: {e}', ha='center', va='center')
-                    ax4.set_title(f'Risk-Free Rate 추이 ({self.rf_ticker})')
-            else:
-                ax4.text(0.5, 0.5, f'고정 RF: {self.default_rf_rate*100:.1f}%', 
-                        ha='center', va='center', fontsize=14)
-                ax4.set_title('Risk-Free Rate (고정)')
-            
-            plt.tight_layout()
-            plt.savefig(f'{self.current_preset["name"].replace(" ", "_").lower()}_dashboard_dynamic_rf.png', 
-                       dpi=300, bbox_inches='tight')
-            plt.show()
-            
-            # 투자 권고 (동적 RF 고려)
-            print("\n=== 투자 권고 (동적 Risk-Free Rate 고려) ===")
+            # 투자 권고 (통합 모델 + 동적 RF 고려)
+            print("\n=== 투자 권고 (통합 모델 + 동적 Risk-Free Rate) ===")
             if current_regime and current_regime['regime'] == 'BULL' and selected:
-                print(f"✅ 투자 실행 권고")
+                print(f"✅ 투자 실행 권고 (통합 모델)")
                 print(f"   - 투자 가능 구성요소: {len(selected)}개")
                 print(f"   - 권고사항: 선택된 구성요소에 동일 가중 분산 투자")
+                print(f"   - Feature Type: {current_regime.get('feature_type', 'Unknown')}")
+                print(f"   - Jump Penalty: {self.jump_penalty} (체제 안정성)")
                 
                 # RF 수준별 추가 권고
                 if current_regime['dynamic_rf_used']:
@@ -821,16 +818,19 @@ Risk-Free Rate: {rf_status} ({current_regime['current_rf_rate']:.3f}%)"""
                         print(f"   - 🔸 보통 금리 환경 ({rf_level:.2f}%): 표준 포지션 사이징")
                         
             elif current_regime and current_regime['regime'] == 'BEAR':
-                print(f"❌ 투자 중단 권고")
+                print(f"❌ 투자 중단 권고 (통합 모델)")
                 print(f"   - 시장 체제: BEAR (하락장)")
                 print(f"   - 권고사항: 모든 포지션 청산 후 현금 보유")
+                print(f"   - Jump Penalty {self.jump_penalty}로 인한 안정적 체제 판단")
                 
                 if current_regime['dynamic_rf_used']:
                     rf_level = current_regime['current_rf_rate']
                     print(f"   - 현금 수익률: {rf_level:.3f}% (Risk-Free Rate)")
             else:
-                print(f"⚠️ 대기 권고")
+                print(f"⚠️ 대기 권고 (통합 모델)")
                 print(f"   - 투자 가능한 구성요소가 없음")
+        
+        print(f"\n통합 모델 대시보드 생성 완료!")
 
 
 def main():
@@ -838,8 +838,8 @@ def main():
     runner = UniversalStrategyRunner()
     
     print("\n" + "="*80)
-    print("범용 RS 모멘텀 전략 + Jump Model + 동적 Risk-Free Rate 시스템")
-    print("다양한 시장과 자산군에 적용 가능한 전략")
+    print("범용 RS 모멘텀 전략 + 통합 Jump Model + 동적 Risk-Free Rate 시스템")
+    print("통합된 특징 계산 코드로 일관성 있는 분석 제공")
     print("="*80)
     
     while True:
@@ -862,10 +862,12 @@ def main():
             elif choice == '7':
                 runner.configure_risk_free_rate()
             elif choice == '8':
-                runner.dynamic_rf_performance_analysis()
+                runner.configure_unified_model()
             elif choice == '9':
+                runner.dynamic_rf_performance_analysis()
+            elif choice == '10':
                 print("\n프로그램을 종료합니다.")
-                print("동적 Risk-Free Rate 시스템을 사용해주셔서 감사합니다!")
+                print("통합 Jump Model + 동적 Risk-Free Rate 시스템을 사용해주셔서 감사합니다!")
                 break
             else:
                 print("\n잘못된 선택입니다. 다시 선택해주세요.")
