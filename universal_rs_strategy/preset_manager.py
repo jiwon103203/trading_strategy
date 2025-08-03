@@ -34,16 +34,16 @@ class PresetManager:
             'benchmark': '069500.KS',  # KODEX 200
             'name': 'KOSPI 200 Sector RS Strategy (Large Cap)',
             'components': {
-                '139220.KS': 'TIGER 200 IT',
-                '139230.KS': 'TIGER 200 산업재',
-                '139240.KS': 'TIGER 200 소비재',
-                '139250.KS': 'TIGER 200 금융',
-                '139260.KS': 'TIGER 200 중공업',
-                '139270.KS': 'TIGER 200 경기소비재',
-                '139280.KS': 'TIGER 200 에너지화학',
-                '139290.KS': 'TIGER 200 철강소재',
+                '139220.KS': 'TIGER 200 건설기계중공업',
+                '139230.KS': 'TIGER 200 중공업',
+                '139240.KS': 'TIGER 200 철강소재',
+                '139250.KS': 'TIGER 200 에너지화학',
+                '139260.KS': 'TIGER 200 IT',
+                '139270.KS': 'TIGER 200 금융',
+                '139280.KS': 'TIGER 200 필수소비재',
+                '139290.KS': 'TIGER 200 자유(경기)소비재',
                 '227540.KS': 'TIGER 200 건강관리',
-                '227550.KS': 'TIGER 200 커뮤니케이션서비스'
+                '315270.KS': 'TIGER 200 커뮤니케이션서비스'
             }
         }
     
@@ -64,13 +64,6 @@ class PresetManager:
                 '139240.KS': 'TIGER 200 소비재',  # 대체용
                 '227540.KS': 'TIGER 200 건강관리',  # 대체용
                 '148020.KS': 'TIGER 코스피고배당',
-                '114800.KS': 'KODEX 인버스',
-                '252670.KS': 'KODEX 200선물인버스2X',
-                '233740.KS': 'KODEX 코스닥150선물인버스',
-                '251340.KS': 'KODEX 코스닥150',
-                '152100.KS': 'ARIRANG 코스피',
-                '069660.KS': 'KOSEF 200',
-                '278530.KS': 'KODEX 200TR',
                 '130680.KS': 'TIGER 바이오헬스케어'
             }
         }
@@ -82,18 +75,8 @@ class PresetManager:
             'benchmark': '229200.KS',  # KODEX 코스닥150
             'name': 'KOSDAQ Sector RS Strategy',
             'components': {
-                '251340.KS': 'KODEX 코스닥150',
-                '233740.KS': 'KODEX 코스닥150선물인버스',
                 '130680.KS': 'TIGER 바이오헬스케어',
-                '091160.KS': 'KODEX 하이일드',
                 '182490.KS': 'TIGER 코스닥150',
-                '261220.KS': 'KODEX WTI원유선물',
-                '238720.KS': 'KODEX 코스닥150 레버리지',
-                '130730.KS': 'KOSEF 단기자금',
-                '148070.KS': 'KOSEF 국고채10년',
-                '285130.KS': 'KODEX 코스닥150 선물',
-                '252710.KS': 'TIGER 코스닥150 레버리지',
-                '143850.KS': 'TIGER 코스닥150 ETN'
             }
         }
     
@@ -252,12 +235,10 @@ class PresetManager:
             'benchmark': 'BITO',  # ProShares Bitcoin Strategy ETF
             'name': 'Crypto Assets RS Strategy',
             'components': {
-                'GBTC': 'Grayscale Bitcoin Trust',
-                'ETHE': 'Grayscale Ethereum Trust',
-                'BITO': 'ProShares Bitcoin Strategy',
-                'BITQ': 'Bitwise Crypto Industry Innovators',
-                'BLOK': 'Amplify Transformational Data Sharing',
-                'BLCN': 'Reality Shares Nasdaq NextGen Economy'
+                'BTC-USD': 'Bitcoin',
+                'ETH-USD': 'Etherium',
+                'XRP-USD': 'Ripple',
+                'SOL-USD': 'Solana',
             }
         }
     
