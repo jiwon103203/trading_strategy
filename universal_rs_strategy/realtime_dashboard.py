@@ -953,7 +953,7 @@ class UnifiedRealtimeDashboard:
             st.metric("Success Rate", f"{success_rate:.1f}%")
         
         # 차트들
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         
         with col1:
             # 체제 분포
@@ -976,31 +976,6 @@ class UnifiedRealtimeDashboard:
             )])
             fig_oos.update_layout(title="Sample Distribution")
             st.plotly_chart(fig_oos, use_container_width=True)
-        
-        with col3:
-            # Feature Type 분포
-            enhanced_features_count = len(results) - paper_features_count
-            fig_features = go.Figure(data=[go.Pie(
-                labels=['Paper Features', 'Enhanced Features'],
-                values=[paper_features_count, enhanced_features_count],
-                marker_colors=['#9c27b0', '#795548']
-            )])
-            fig_features.update_layout(title="Feature Type Distribution")
-            st.plotly_chart(fig_features, use_container_width=True)
-        
-        # 성공률 정보
-        success_rate = (bull_count + bear_count) / len(results) * 100
-        st.success(f"✅ Analysis completed with Unified Model! Success rate: {success_rate:.1f}%")
-        
-        # 통합 모델 상태 정보
-        st.markdown(f"""
-        <div class="unified-model">
-            <strong>🔧 Unified Model Analysis Summary</strong><br>
-            📊 Assets analyzed with unified model: {unified_model_count}/{len(results)}<br>
-            📈 Feature type distribution: {paper_features_count} Paper Features, {enhanced_features_count} Enhanced Features<br>
-            🎯 Jump Penalty used: {st.session_state.jump_penalty}
-        </div>
-        """, unsafe_allow_html=True)
     
     def _display_backtest_results(self):
         """백테스트 결과 표시"""

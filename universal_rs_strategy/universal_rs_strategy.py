@@ -58,42 +58,6 @@ class UniversalRSStrategy:
         print(f"설정: timeframe={self.timeframe}, length={self.length}")
         print(f"Risk-Free Rate: {self.rf_ticker} (기본값: {self.default_rf_rate*100:.1f}%)")
     
-    def safe_extract_close(self, data):
-        """완전히 안전한 Close 데이터 추출"""
-        try:
-            if data is None:
-                return None
-            
-            # Series인 경우
-            if isinstance(data, pd.Series):
-                if len(data) == 0:
-                    return None
-                return data
-            
-            # DataFrame인 경우
-            if isinstance(data, pd.DataFrame):
-                if len(data) == 0:
-                    return None
-                    
-                if 'Close' in data.columns:
-                    close_series = data['Close']
-                    if isinstance(close_series, pd.DataFrame):
-                        if len(close_series.columns) > 0:
-                            return close_series.iloc[:, 0]
-                        else:
-                            return None
-                    return close_series
-                elif len(data.columns) > 0:
-                    return data.iloc[:, 0]
-                else:
-                    return None
-            
-            return None
-            
-        except Exception as e:
-            print(f"데이터 추출 오류: {e}")
-            return None
-    
     def safe_data_validation(self, data, min_length=None):
         """안전한 데이터 검증"""
         try:
@@ -137,8 +101,8 @@ class UniversalRSStrategy:
                 auto_adjust=True
             )
             
-            # 안전한 데이터 추출
-            benchmark_data = self.safe_extract_close(benchmark_df)
+            benchmark_data = benchmark_df.copy()
+            benchmark_data.columns = benchmark_data.columns.droplevel(1)
             
             # 안전한 검증
             if not self.safe_data_validation(benchmark_data, self.length):
@@ -166,7 +130,9 @@ class UniversalRSStrategy:
                 )
                 
                 # 안전한 데이터 추출
-                data = self.safe_extract_close(df)
+                data = df.copy()
+                data.columns = data.columns.droplevel(1)
+
                 
                 # 안전한 검증
                 if self.safe_data_validation(data, self.length):
@@ -238,8 +204,11 @@ class UniversalRSStrategy:
             print("    RS 계산 시작...")
             
             # 입력 데이터 안전하게 처리
-            price_series = self.safe_extract_close(price_data)
-            benchmark_series = self.safe_extract_close(benchmark_data)
+            price_series = price_data.copy()
+            price_series.columns = price_series.columns.droplevel(1)
+
+            benchmark_series = benchmark_data.copy()
+            benchmark_series.columns = benchmark_series.columns.droplevel(1)
             
             # 데이터 검증
             if not self.safe_data_validation(price_series, self.length * 2):

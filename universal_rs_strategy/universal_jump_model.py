@@ -88,7 +88,7 @@ class UniversalJumpModel:
         self.is_trained = False
         
         # 최소 데이터 요구량 (realtime_dashboard 기준)
-        self.min_data_length = 300  # realtime_dashboard에서 사용하는 값
+        self.min_data_length = 90  # realtime_dashboard에서 사용하는 값
         
         feature_type = "논문 정확한 3특징" if use_paper_features_only else "논문 기반 + 추가 특징"
         print(f"EWM Jump Model 초기화 (통합): {feature_type}")
