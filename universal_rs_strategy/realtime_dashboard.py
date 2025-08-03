@@ -2,7 +2,7 @@
 실시간 모니터링 대시보드 - 통합된 Jump Model 사용
 웹 기반 인터랙티브 대시보드 (Streamlit 사용)
 전체 ETF 지원 + 종합 Bull/Bear 상태 모니터링
-2025년 6월까지 학습, 2025년 하반기 추론 모델 적용
+2024년까지 학습, 2025년 추론 모델 적용
 동적 Risk-Free Rate (^IRX) 기반 성과 분석
 """
 
@@ -401,7 +401,7 @@ class UnifiedRealtimeDashboard:
             📊 Feature Type: {'논문 정확한 3특징' if st.session_state.use_paper_features_only else '논문 기반 + 추가 특징'}<br>
             🎯 Jump Penalty: {st.session_state.jump_penalty} | 
             🏦 RF Ticker: {st.session_state.rf_ticker} | 
-            📅 Training Cutoff: 2025-06-30
+            📅 Training Cutoff: 2024-12-31
         </div>
         """, unsafe_allow_html=True)
         
@@ -410,9 +410,8 @@ class UnifiedRealtimeDashboard:
             self._display_rf_info()
         
         # 탭 생성
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📈 Market Status", "🎯 Current Signals", "🌍 All Regimes", "📊 Backtest Results", "🏦 RF Analysis"
-        ])
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📈 Market Status", "🎯 Current Signals", "🌍 All Regimes", "📊 Backtest Results"])
         
         with tab1:
             self._display_market_status()
@@ -425,9 +424,6 @@ class UnifiedRealtimeDashboard:
         
         with tab4:
             self._display_backtest_results()
-        
-        with tab5:
-            self._display_rf_analysis()
     
     def _display_rf_info(self):
         """Risk-Free Rate 정보 표시"""
@@ -461,7 +457,7 @@ class UnifiedRealtimeDashboard:
     def _display_market_status(self):
         """시장 상태 표시"""
         st.subheader("Market Regime Analysis")
-        st.markdown("**Unified Model**: Integrated feature calculation | **Training**: 2005-2025.06 | **Inference**: 2025")
+        st.markdown("**Unified Model**: Integrated feature calculation | **Training**: 2005-2024 | **Inference**: 2025")
         
         preset = st.session_state.selected_preset
         
@@ -474,7 +470,7 @@ class UnifiedRealtimeDashboard:
                         benchmark_name=preset['name'],
                         use_paper_features_only=st.session_state.use_paper_features_only,
                         jump_penalty=st.session_state.jump_penalty,
-                        training_cutoff_date=datetime(2025, 6, 30),
+                        training_cutoff_date=datetime(2024, 12, 31),
                         rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                         default_rf_rate=st.session_state.default_rf_rate
                     )
@@ -521,7 +517,7 @@ class UnifiedRealtimeDashboard:
             oos_status = "Out-of-Sample" if regime_info.get('is_out_of_sample', False) else "In-Sample"
             st.info(f"🔮 Status: {oos_status}")
         with col3:
-            training_cutoff = regime_info.get('training_cutoff', '2025-06-30')
+            training_cutoff = regime_info.get('training_cutoff', '2024-12-31')
             st.info(f"📚 Training Cutoff: {training_cutoff}")
         
         # 특징값 표시
@@ -548,7 +544,7 @@ class UnifiedRealtimeDashboard:
                         benchmark_name=preset['name'],
                         use_paper_features_only=st.session_state.use_paper_features_only,
                         jump_penalty=st.session_state.jump_penalty,
-                        training_cutoff_date=datetime(2025, 6, 30),
+                        training_cutoff_date=datetime(2024, 12, 31),
                         rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                         default_rf_rate=st.session_state.default_rf_rate
                     )
@@ -828,7 +824,7 @@ class UnifiedRealtimeDashboard:
                     benchmark_name=name,
                     use_paper_features_only=st.session_state.use_paper_features_only,  # 설정된 값 사용
                     jump_penalty=st.session_state.jump_penalty,  # 설정된 값 사용
-                    training_cutoff_date=datetime(2025, 6, 30),
+                    training_cutoff_date=datetime(2024, 12, 31),
                     rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                     default_rf_rate=st.session_state.default_rf_rate
                 )
@@ -943,7 +939,7 @@ class UnifiedRealtimeDashboard:
         dynamic_rf_count = sum(1 for r in results.values() if r.get('dynamic_rf_used', False))
         unified_model_count = sum(1 for r in results.values() if r.get('unified_model_used', False))
         
-        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Total Assets", len(results))
         with col2:
@@ -952,10 +948,6 @@ class UnifiedRealtimeDashboard:
             st.metric("🔴 BEAR", bear_count)
         with col4:
             st.metric("⚠️ Issues", unknown_count)
-        with col5:
-            st.metric("🔮 Out-of-Sample", oos_count)
-        with col6:
-            st.metric("🔧 Unified Model", unified_model_count)
         
         # 추가 메트릭
         col1, col2, col3 = st.columns(3)
@@ -1072,42 +1064,7 @@ class UnifiedRealtimeDashboard:
                 height=400
             )
             st.plotly_chart(fig, use_container_width=True)
-    
-    def _display_rf_analysis(self):
-        """Risk-Free Rate 분석"""
-        st.subheader("🏦 Risk-Free Rate Analysis")
-        
-        if not st.session_state.use_dynamic_rf:
-            st.info(f"📌 **Fixed Rate Mode**: Using {st.session_state.default_rf_rate*100:.1f}%")
-            st.markdown("""
-            **Fixed Rate Benefits:**
-            - Consistent performance metrics
-            - Stable Sharpe ratio calculations
-            - No dependency on market conditions
-            
-            **To enable Dynamic RF analysis:**
-            - Switch to "Dynamic (^IRX)" mode in the sidebar
-            - Requires risk_free_rate_utils.py
-            """)
-            return
-        
-        if not HAS_RF_UTILS:
-            st.warning("⚠️ Dynamic Risk-Free Rate analysis requires risk_free_rate_utils.py")
-            st.info("Currently using fixed rate mode")
-            return
-        
-        # 분석 기간 선택
-        period_options = {30: "1 Month", 90: "3 Months", 180: "6 Months", 365: "1 Year"}
-        selected_days = st.selectbox(
-            "Analysis Period", 
-            options=list(period_options.keys()),
-            format_func=lambda x: period_options[x],
-            index=3
-        )
-        
-        if st.button("📊 Analyze Dynamic RF Data (Unified Model)", type="primary"):
-            with st.spinner("Analyzing ^IRX Risk-Free Rate data with unified model..."):
-                self._analyze_rf_data(selected_days)
+
     
     def _analyze_rf_data(self, days):
         """Risk-Free Rate 데이터 분석"""
@@ -1206,7 +1163,7 @@ class UnifiedRealtimeDashboard:
                     use_jump_model=True,
                     rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                     default_rf_rate=st.session_state.default_rf_rate,
-                    training_cutoff_date=datetime(2025, 6, 30)
+                    training_cutoff_date=datetime(2024, 12, 31)
                 )
                 
                 end_date = datetime.now()
@@ -1221,7 +1178,7 @@ class UnifiedRealtimeDashboard:
                         'regime': regime_df,
                         'metrics': strategy.calculate_performance_metrics(portfolio_df),
                         'use_jump_model': True,
-                        'training_cutoff': '2025-06-30',
+                        'training_cutoff': '2024-12-31',
                         'rf_ticker': st.session_state.rf_ticker,
                         'dynamic_rf_used': st.session_state.use_dynamic_rf and HAS_RF_UTILS,
                         'unified_model_used': True,  # 통합 모델 사용 표시

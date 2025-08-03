@@ -100,7 +100,7 @@ class UniversalJumpModel:
         try:
             print(f"{self.benchmark_name} 데이터 다운로드 중...")
             
-            extended_start = start_date - timedelta(days=100)
+            extended_start = start_date - timedelta(days=90)
             
             # realtime_dashboard.py와 동일한 timeout 설정
             data = yf.download(
@@ -812,7 +812,7 @@ class UniversalJumpModel:
                     return None
             
             current_date = datetime.now()
-            inference_start = self.training_cutoff_date - timedelta(days=200)
+            inference_start = self.training_cutoff_date - timedelta(days=90)
             
             print(f"추론 데이터 다운로드: {inference_start.strftime('%Y-%m-%d')} ~ {current_date.strftime('%Y-%m-%d')}")
             

@@ -40,6 +40,7 @@ class RiskFreeRateManager:
                 progress=False,
                 auto_adjust=True
             )
+            rf_df.columns = rf_df.columns.droplevel(1)
             
             if rf_df.empty:
                 print(f"Warning: {self.rf_ticker} 데이터가 없습니다. 기본 금리 {self.default_rate*100:.1f}% 사용")
