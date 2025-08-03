@@ -155,7 +155,6 @@ class UnifiedRealtimeDashboard:
             'use_dynamic_rf': True,
             'use_paper_features_only': True,  # 통합 모델 기본값
             'jump_penalty': 50.0,  # 통합 모델 기본값
-            'debug_mode': False
         }
         
         for key, value in defaults.items():
@@ -166,8 +165,6 @@ class UnifiedRealtimeDashboard:
         """대시보드 실행"""
         st.title("🚀 Universal RS Strategy Dashboard - Unified Model Edition")
         st.markdown("### Real-time Market Monitoring & Signal Generation with Unified Jump Model")
-        
-        st.success("🔧 **Unified Model**: Jump Model 특징 계산 코드가 통합되었습니다!")
         
         # Risk-Free Rate 상태 표시
         rf_status = "📊 Dynamic" if (HAS_RF_UTILS and st.session_state.use_dynamic_rf) else "📌 Fixed"
@@ -186,13 +183,6 @@ class UnifiedRealtimeDashboard:
         """사이드바 생성 - 통합 모델 설정 포함"""
         st.sidebar.header("Configuration")
         
-        # 디버그 모드
-        st.session_state.debug_mode = st.sidebar.checkbox(
-            "🐛 Debug Mode", 
-            value=st.session_state.debug_mode,
-            help="Show detailed error information"
-        )
-        
         # 통합 모델 설정
         self._configure_unified_model()
         
@@ -208,10 +198,6 @@ class UnifiedRealtimeDashboard:
         # 고급 기능
         self._advanced_features()
         
-        # 버전 정보
-        st.sidebar.markdown("---")
-        st.sidebar.markdown("**📊 Dashboard Info**")
-        st.sidebar.info("Version: 4.0.0 (Unified Model)")
     
     def _configure_unified_model(self):
         """통합 모델 설정"""
@@ -381,7 +367,7 @@ class UnifiedRealtimeDashboard:
         preset = st.session_state.selected_preset
         
         # 헤더 정보
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Strategy", st.session_state.preset_name)
         with col2:
@@ -391,9 +377,6 @@ class UnifiedRealtimeDashboard:
         with col4:
             rf_status = "📊 Dynamic" if (HAS_RF_UTILS and st.session_state.use_dynamic_rf) else "📌 Fixed"
             st.metric("Risk-Free Rate", f"{rf_status}")
-        with col5:
-            feature_status = "📊 3특징" if st.session_state.use_paper_features_only else "📈 확장특징"
-            st.metric("Features", f"{feature_status}")
         
         # 통합 모델 정보
         st.markdown(f"""
@@ -486,8 +469,6 @@ class UnifiedRealtimeDashboard:
                         
                 except Exception as e:
                     st.error(f"Market regime analysis failed: {str(e)}")
-                    if st.session_state.debug_mode:
-                        st.code(traceback.format_exc())
     
     def _display_regime_info(self, regime_info):
         """체제 정보 표시 - 통합 모델 버전"""
@@ -564,8 +545,6 @@ class UnifiedRealtimeDashboard:
                     
                 except Exception as e:
                     st.error(f"Signal analysis failed: {str(e)}")
-                    if st.session_state.debug_mode:
-                        st.code(traceback.format_exc())
     
     def _analyze_rs_strategy(self, preset, current_regime):
         """RS 전략 분석"""
@@ -1158,8 +1137,6 @@ class UnifiedRealtimeDashboard:
                     
             except Exception as e:
                 st.error(f"Backtest failed: {str(e)}")
-                if st.session_state.debug_mode:
-                    st.code(traceback.format_exc())
     
     def _refresh_regimes(self):
         """체제 새로고침"""
