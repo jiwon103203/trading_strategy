@@ -1,18 +1,17 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from trading_strategy.universal_rs_strategy.core.universal_rs_strategy import UniversalRSStrategy
-from trading_strategy.universal_rs_strategy.core.universal_jump_model import UniversalJumpModel
-from trading_strategy.universal_rs_strategy.core.utils import safe_float, safe_extract_close, validate_data, calculate_basic_metrics, print_status
+from universal_rs_strategy import UniversalRSStrategy
+from universal_jump_model import UniversalJumpModel  # 통합된 모델 사용
 import warnings
 warnings.filterwarnings('ignore')
 
 # Risk-free rate 유틸리티 import
 try:
-    from trading_strategy.universal_rs_strategy.advanced.risk_free_rate_utils import RiskFreeRateManager, calculate_dynamic_sharpe_ratio, calculate_dynamic_sortino_ratio
+    from risk_free_rate_utils import RiskFreeRateManager, calculate_dynamic_sharpe_ratio, calculate_dynamic_sortino_ratio
     HAS_RF_UTILS = True
 except ImportError:
-    print_status("risk_free_rate_utils.py가 없습니다. 기본 risk-free rate (2%) 사용", "WARNING")
+    print("Warning: risk_free_rate_utils.py가 없습니다. 기본 risk-free rate (2%) 사용")
     HAS_RF_UTILS = False
 
 class UniversalRSWithJumpModel:
@@ -29,7 +28,7 @@ class UniversalRSWithJumpModel:
                  rs_recent_cross_days=None, jump_penalty=50.0, 
                  regime_lookback=20, use_jump_model=True,
                  training_cutoff_date=None, rf_ticker='^IRX', default_rf_rate=0.02,
-                 use_paper_features_only=True):
+                 use_paper_features_only=True):  # 통합 모델 기본값 추가
         """
         Parameters:
         - preset_config: 프리셋 설정 딕셔너리 (benchmark, components, name)
@@ -50,7 +49,10 @@ class UniversalRSWithJumpModel:
             components=preset_config['components'],
             name=preset_config['name'],
             length=rs_length,
-            timeframe=rs_timeframe
+            timeframe=rs_timeframe,
+            recent_cross_days=rs_recent_cross_days,
+            rf_ticker=rf_ticker,
+            default_rf_rate=default_rf_rate
         )
         
         # Jump Model 사용 여부
@@ -81,20 +83,24 @@ class UniversalRSWithJumpModel:
             self.jump_model = UniversalJumpModel(
                 benchmark_ticker=preset_config['benchmark'],
                 benchmark_name=preset_config.get('name', 'Market'),
-                jump_penalty=self.jump_penalty,
-                training_cutoff_date=self.training_cutoff_date
+                n_states=2,
+                jump_penalty=self.jump_penalty,  # 설정값 사용
+                use_paper_features_only=self.use_paper_features_only,  # 설정값 사용
+                training_cutoff_date=self.training_cutoff_date,
+                rf_ticker=rf_ticker,
+                default_rf_rate=default_rf_rate
             )
-            print_status(f"통합된 Jump Model 초기화:")
-            print_status(f"  - Feature Type: {'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}")
-            print_status(f"  - Jump Penalty: {self.jump_penalty}")
-            print_status(f"  - 학습 마감일: {self.training_cutoff_date.strftime('%Y-%m-%d')}")
+            print(f"통합된 Jump Model 초기화:")
+            print(f"  - Feature Type: {'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}")
+            print(f"  - Jump Penalty: {self.jump_penalty}")
+            print(f"  - 학습 마감일: {self.training_cutoff_date.strftime('%Y-%m-%d')}")
         else:
             self.jump_model = None
         
         self.regime_history = None
         self.preset_config = preset_config
         
-        print_status(f"통합 전략 초기화: Risk-Free Rate = {self.rf_ticker}")
+        print(f"통합 전략 초기화: Risk-Free Rate = {self.rf_ticker}")
         
     def prepare_regime_data(self, start_date, end_date):
         """백테스트를 위한 체제 데이터 준비 - 통합 모델 사용"""
@@ -104,33 +110,98 @@ class UniversalRSWithJumpModel:
                 'state': 0,
                 'regime': 'BULL'
             }, index=dates)
-            print_status("Jump Model 비활성화 - 항상 BULL 체제")
+            print("Jump Model 비활성화 - 항상 BULL 체제")
             return self.regime_history
         
+        # Jump Model 학습을 위해 추가 기간 확보
+        extended_start = start_date - timedelta(days=100)
+        
         # 체제 이력 계산 (통합 모델 + training cutoff 고려)
-        print_status(f"{self.preset_config['name']} 체제 분석 중... (통합 모델)")
-        print_status(f"Feature Type: {'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}")
-        print_status(f"Jump Penalty: {self.jump_penalty}")
-        print_status(f"학습 마감일: {self.training_cutoff_date.strftime('%Y-%m-%d')}")
+        print(f"{self.preset_config['name']} 체제 분석 중... (통합 모델)")
+        print(f"Feature Type: {'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}")
+        print(f"Jump Penalty: {self.jump_penalty}")
+        print(f"학습 마감일: {self.training_cutoff_date.strftime('%Y-%m-%d')}")
         
-        # 현재 체제만 분석 (간단한 버전)
-        current_regime = self.jump_model.get_current_regime_with_training_cutoff()
+        # 먼저 모델을 학습시키고
+        self.jump_model.train_model_with_cutoff(
+            start_date=extended_start - timedelta(days=365*15),  # 15년 전부터
+            end_date=self.training_cutoff_date
+        )
         
-        if current_regime:
-            # 간단한 체제 데이터 생성
-            dates = pd.date_range(start=start_date, end=end_date, freq='D')
-            regime_value = current_regime['regime']
+        # 전체 기간에 대한 체제 예측 수행
+        if end_date <= self.training_cutoff_date:
+            # 백테스트 기간이 모두 학습 기간 내인 경우
+            self.regime_history = self.jump_model.get_regime_history(extended_start, end_date)
+        else:
+            # 백테스트 기간이 학습 기간을 넘어가는 경우
+            # 학습 기간 내 체제 + 추론 기간 체제를 결합
             
-            self.regime_history = pd.DataFrame({
-                'state': 0 if regime_value == 'BULL' else 1,
-                'regime': regime_value
-            }, index=dates)
+            # 1. 학습 기간 내 체제 계산
+            in_sample_regime = self.jump_model.get_regime_history(extended_start, self.training_cutoff_date)
             
+            # 2. 추론 기간 체제 예측
+            out_of_sample_dates = pd.date_range(
+                start=self.training_cutoff_date + timedelta(days=1),
+                end=end_date,
+                freq='D'
+            )
+            
+            # 각 날짜별로 예측 수행 (통합 모델 사용)
+            oos_regimes = []
+            for date in out_of_sample_dates:
+                try:
+                    # 특징 계산을 위한 데이터 준비
+                    feature_start = date - timedelta(days=200)  # 통합 모델의 min_data_length 고려
+                    price_data = self.jump_model.download_benchmark_data(feature_start, date)
+                    
+                    if price_data is not None and not price_data.empty:
+                        features_df = self.jump_model.calculate_features(price_data)
+                        if not features_df.empty:
+                            latest_features = features_df.iloc[-1]
+                            regime, _ = self.jump_model.predict_regime(latest_features)
+                            oos_regimes.append(regime)
+                        else:
+                            oos_regimes.append('BULL')  # 기본값
+                    else:
+                        oos_regimes.append('BULL')  # 기본값
+                except:
+                    oos_regimes.append('BULL')  # 오류시 기본값
+            
+            # Out-of-sample 체제 데이터프레임 생성
+            if oos_regimes:
+                out_of_sample_regime = pd.DataFrame({
+                    'state': [0 if r == 'BULL' else 1 for r in oos_regimes],
+                    'regime': oos_regimes
+                }, index=out_of_sample_dates)
+                
+                # 두 기간 결합
+                if in_sample_regime is not None:
+                    self.regime_history = pd.concat([in_sample_regime, out_of_sample_regime])
+                else:
+                    self.regime_history = out_of_sample_regime
+            else:
+                self.regime_history = in_sample_regime
+        
+        if self.regime_history is not None:
             # 체제별 통계
             bull_pct = (self.regime_history['regime'] == 'BULL').mean() * 100
             bear_pct = (self.regime_history['regime'] == 'BEAR').mean() * 100
             
-            print_status(f"체제 분포 (통합 모델): BULL {bull_pct:.1f}%, BEAR {bear_pct:.1f}%")
+            print(f"체제 분포 (통합 모델): BULL {bull_pct:.1f}%, BEAR {bear_pct:.1f}%")
+            
+            # 체제 전환 횟수
+            regime_changes = self.regime_history['regime'] != self.regime_history['regime'].shift()
+            n_changes = regime_changes.sum() - 1
+            
+            print(f"체제 전환 횟수: {n_changes}회 (Jump Penalty: {self.jump_penalty})")
+            
+            # Out-of-sample 기간 통계
+            if end_date > self.training_cutoff_date:
+                oos_start = self.training_cutoff_date + timedelta(days=1)
+                oos_regime = self.regime_history[oos_start:]
+                if not oos_regime.empty:
+                    oos_bull_pct = (oos_regime['regime'] == 'BULL').mean() * 100
+                    print(f"Out-of-sample 기간 BULL 비율: {oos_bull_pct:.1f}% (통합 모델)")
         
         return self.regime_history
     
@@ -159,7 +230,7 @@ class UniversalRSWithJumpModel:
         
         # Jump Model 비활성화시 기본 RS 전략 실행
         if not self.use_jump_model:
-            print_status("Jump Model 비활성화 - 기본 RS 전략 실행")
+            print("Jump Model 비활성화 - 기본 RS 전략 실행")
             portfolio_df, trades_df = self.rs_strategy.backtest(start_date, end_date, initial_capital)
             
             if portfolio_df is not None and not portfolio_df.empty:
@@ -173,11 +244,11 @@ class UniversalRSWithJumpModel:
             return portfolio_df, trades_df, regime_df
         
         # 1. 체제 데이터 준비 (통합 모델 사용)
-        print_status(f"통합 모델 백테스트 시작:")
-        print_status(f"  - Feature Type: {'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}")
-        print_status(f"  - Jump Penalty: {self.jump_penalty}")
-        print_status(f"  - Training cutoff: {self.training_cutoff_date.strftime('%Y-%m-%d')}")
-        print_status(f"  - Risk-Free Rate: {self.rf_ticker}")
+        print(f"통합 모델 백테스트 시작:")
+        print(f"  - Feature Type: {'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}")
+        print(f"  - Jump Penalty: {self.jump_penalty}")
+        print(f"  - Training cutoff: {self.training_cutoff_date.strftime('%Y-%m-%d')}")
+        print(f"  - Risk-Free Rate: {self.rf_ticker}")
         
         self.prepare_regime_data(start_date, end_date)
         
@@ -188,8 +259,8 @@ class UniversalRSWithJumpModel:
             end_date
         )
         
-        if not validate_data(price_data) or not validate_data(benchmark_data):
-            print_status("데이터 다운로드 실패", "ERROR")
+        if price_data is None or benchmark_data is None:
+            print("데이터 다운로드 실패")
             return None, None, None
         
         # 3. 리밸런싱 날짜 생성
@@ -203,7 +274,7 @@ class UniversalRSWithJumpModel:
         regime_log = []
         
         for i, rebal_date in enumerate(rebalance_dates):
-            print_status(f"{rebal_date.strftime('%Y-%m-%d')} 리밸런싱 (통합 모델)")
+            print(f"\n{rebal_date.strftime('%Y-%m-%d')} 리밸런싱 (통합 모델)")
             
             # 현재 체제 확인
             current_regime = self.get_regime_on_date(rebal_date)
@@ -212,7 +283,7 @@ class UniversalRSWithJumpModel:
             is_oos = rebal_date > self.training_cutoff_date
             oos_indicator = " (Out-of-Sample)" if is_oos else " (In-Sample)"
             
-            print_status(f"현재 시장 체제: {current_regime}{oos_indicator}")
+            print(f"현재 시장 체제: {current_regime}{oos_indicator}")
             
             regime_log.append({
                 'date': rebal_date,
@@ -225,7 +296,7 @@ class UniversalRSWithJumpModel:
             
             # BEAR 체제인 경우 모든 포지션 청산
             if current_regime == 'BEAR':
-                print_status("BEAR 체제 - 모든 투자 중단 (통합 모델)")
+                print("BEAR 체제 - 모든 투자 중단 (통합 모델)")
                 
                 # 기존 포지션 청산
                 if holdings:
@@ -242,7 +313,7 @@ class UniversalRSWithJumpModel:
                                 'name': holding['name'],
                                 'action': 'SELL_BEAR',
                                 'shares': holding['shares'],
-                                'price': safe_float(exit_price),
+                                'price': float(exit_price),
                                 'unified_model': True
                             })
                         except:
@@ -281,7 +352,7 @@ class UniversalRSWithJumpModel:
             selected_components = self.rs_strategy.select_components(price_data, benchmark_data, analysis_date)
             
             if not selected_components:
-                print_status("선택된 구성요소가 없습니다.")
+                print("선택된 구성요소가 없습니다.")
                 # 현금 보유
                 if i < len(rebalance_dates) - 1:
                     next_date = rebalance_dates[i + 1]
@@ -303,9 +374,9 @@ class UniversalRSWithJumpModel:
                 continue
             
             # 선택된 구성요소 출력
-            print_status(f"선택된 구성요소 수: {len(selected_components)}")
+            print(f"선택된 구성요소 수: {len(selected_components)}")
             for comp in selected_components:
-                print_status(f"  - {comp['name']}: RS-Ratio={comp['rs_ratio']:.2f}, RS-Momentum={comp['rs_momentum']:.2f}")
+                print(f"  - {comp['name']}: RS-Ratio={comp['rs_ratio']:.2f}, RS-Momentum={comp['rs_momentum']:.2f}")
             
             # 동일 가중 투자
             investment_per_component = portfolio_value / len(selected_components)
@@ -321,15 +392,14 @@ class UniversalRSWithJumpModel:
                         nearest_date = price_data[ticker].index[price_data[ticker].index.get_indexer([analysis_date], method='nearest')[0]]
                         current_price = price_data[ticker].loc[nearest_date]
                     
-                    current_price = safe_float(current_price)
-                    if current_price <= 0:
+                    if pd.isna(current_price) or current_price <= 0:
                         continue
                     
                     shares = int(investment_per_component / current_price)
                     if shares > 0:
                         new_holdings[ticker] = {
                             'shares': shares,
-                            'buy_price': current_price,
+                            'buy_price': float(current_price),
                             'name': comp['name']
                         }
                         
@@ -339,12 +409,12 @@ class UniversalRSWithJumpModel:
                             'name': comp['name'],
                             'action': 'BUY',
                             'shares': shares,
-                            'price': current_price,
+                            'price': float(current_price),
                             'unified_model': True
                         })
                 
                 except Exception as e:
-                    print_status(f"{ticker} 매수 실패: {e}", "ERROR")
+                    print(f"{ticker} 매수 실패: {e}")
                     continue
             
             holdings = new_holdings
@@ -364,7 +434,7 @@ class UniversalRSWithJumpModel:
                     
                     # BEAR 체제로 전환된 경우 즉시 청산
                     if self.use_jump_model and daily_regime == 'BEAR' and holdings:
-                        print_status(f"{date.strftime('%Y-%m-%d')} BEAR 체제 감지 - 긴급 청산 (통합 모델)")
+                        print(f"\n{date.strftime('%Y-%m-%d')} BEAR 체제 감지 - 긴급 청산 (통합 모델)")
                         
                         portfolio_value = 0
                         for ticker, holding in holdings.items():
@@ -374,7 +444,7 @@ class UniversalRSWithJumpModel:
                                 else:
                                     exit_price = holding['buy_price']
                                 
-                                portfolio_value += holding['shares'] * safe_float(exit_price)
+                                portfolio_value += holding['shares'] * exit_price
                                 
                                 trade_history.append({
                                     'date': date,
@@ -382,7 +452,7 @@ class UniversalRSWithJumpModel:
                                     'name': holding['name'],
                                     'action': 'SELL_BEAR_EMERGENCY',
                                     'shares': holding['shares'],
-                                    'price': safe_float(exit_price),
+                                    'price': float(exit_price),
                                     'unified_model': True
                                 })
                             except:
@@ -404,7 +474,7 @@ class UniversalRSWithJumpModel:
                                     else:
                                         current_price = holding['buy_price']
                                 
-                                daily_value += holding['shares'] * safe_float(current_price)
+                                daily_value += holding['shares'] * current_price
                             except:
                                 pass
                         
@@ -429,11 +499,11 @@ class UniversalRSWithJumpModel:
         if self.use_jump_model and not portfolio_df.empty:
             oos_df = portfolio_df[portfolio_df['is_out_of_sample'] == True]
             if not oos_df.empty:
-                print_status(f"통합 모델 백테스트 완료:", "SUCCESS")
-                print_status(f"  - Out-of-sample 기간: {len(oos_df)}일")
-                print_status(f"  - Out-of-sample 비율: {len(oos_df) / len(portfolio_df) * 100:.1f}%")
-                print_status(f"  - Feature Type: {'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}")
-                print_status(f"  - Jump Penalty: {self.jump_penalty}")
+                print(f"\n통합 모델 백테스트 완료:")
+                print(f"  - Out-of-sample 기간: {len(oos_df)}일")
+                print(f"  - Out-of-sample 비율: {len(oos_df) / len(portfolio_df) * 100:.1f}%")
+                print(f"  - Feature Type: {'논문 정확한 3특징' if self.use_paper_features_only else '논문 기반 + 추가'}")
+                print(f"  - Jump Penalty: {self.jump_penalty}")
         
         return portfolio_df, trades_df, regime_df
     
@@ -442,10 +512,22 @@ class UniversalRSWithJumpModel:
         if portfolio_df.empty:
             return {}
         
-        print_status(f"성과 지표 계산 중... (통합 모델 + Risk-Free Rate: {self.rf_ticker})")
+        print(f"\n성과 지표 계산 중... (통합 모델 + Risk-Free Rate: {self.rf_ticker})")
         
-        # 기본 성과 지표 계산 (utils 사용)
-        metrics = calculate_basic_metrics(portfolio_df)
+        # 기본 수익률 지표
+        total_return = (portfolio_df['value'].iloc[-1] / portfolio_df['value'].iloc[0] - 1) * 100
+        years = (portfolio_df.index[-1] - portfolio_df.index[0]).days / 365.25
+        annual_return = (np.power(1 + total_return/100, 1/years) - 1) * 100 if years > 0 else 0
+        
+        returns = portfolio_df['value'].pct_change().dropna()
+        annual_volatility = returns.std() * np.sqrt(252) * 100 if len(returns) > 0 else 0
+        
+        # 기본 성과 지표
+        metrics = {
+            '총 수익률': f"{total_return:.2f}%",
+            '연율화 수익률': f"{annual_return:.2f}%",
+            '연율화 변동성': f"{annual_volatility:.2f}%"
+        }
         
         # 동적 Risk-Free Rate를 사용한 성과 지표
         if HAS_RF_UTILS and self.rf_manager:
@@ -454,9 +536,6 @@ class UniversalRSWithJumpModel:
                 start_date = portfolio_df.index[0]
                 end_date = portfolio_df.index[-1]
                 self.rf_manager.download_risk_free_rate(start_date, end_date)
-                
-                # 수익률 계산
-                returns = portfolio_df['value'].pct_change().dropna()
                 
                 # 동적 Sharpe ratio
                 sharpe_ratio = self.rf_manager.calculate_sharpe_ratio(returns, portfolio_df.index)
@@ -467,9 +546,9 @@ class UniversalRSWithJumpModel:
                 # Risk-free rate 통계
                 rf_stats = self.rf_manager.get_risk_free_rate_stats(start_date, end_date)
                 
-                print_status(f"평균 Risk-Free Rate: {rf_stats['mean_rate']:.3f}%")
-                print_status(f"Sharpe Ratio (동적): {sharpe_ratio:.3f}")
-                print_status(f"Sortino Ratio (동적): {sortino_ratio:.3f}")
+                print(f"평균 Risk-Free Rate: {rf_stats['mean_rate']:.3f}%")
+                print(f"Sharpe Ratio (동적): {sharpe_ratio:.3f}")
+                print(f"Sortino Ratio (동적): {sortino_ratio:.3f}")
                 
                 # 메트릭스에 추가
                 metrics.update({
@@ -481,11 +560,15 @@ class UniversalRSWithJumpModel:
                 })
                 
             except Exception as e:
-                print_status(f"동적 성과 지표 계산 실패: {e}", "WARNING")
+                print(f"동적 성과 지표 계산 실패: {e}")
                 # 기본 방식으로 fallback
+                sharpe_ratio = (annual_return - self.default_rf_rate * 100) / annual_volatility if annual_volatility > 0 else 0
+                metrics['샤프 비율 (기본)'] = f"{sharpe_ratio:.2f}"
                 metrics['Risk-Free Rate'] = f"{self.default_rf_rate*100:.1f}% (기본값)"
         else:
             # 기본 방식 (2% 고정)
+            sharpe_ratio = (annual_return - self.default_rf_rate * 100) / annual_volatility if annual_volatility > 0 else 0
+            metrics['샤프 비율 (기본)'] = f"{sharpe_ratio:.2f}"
             metrics['Risk-Free Rate'] = f"{self.default_rf_rate*100:.1f}% (기본값)"
         
         # 통합 모델 정보 추가
@@ -519,7 +602,7 @@ class UniversalRSWithJumpModel:
                                 metrics['Out-of-Sample Sharpe (동적)'] = f"{oos_sharpe:.3f}"
                                 metrics['Out-of-Sample Sortino (동적)'] = f"{oos_sortino:.3f}" if oos_sortino != float('inf') else "∞"
                             except Exception as e:
-                                print_status(f"Out-of-sample 성과 지표 계산 실패: {e}", "WARNING")
+                                print(f"Out-of-sample 성과 지표 계산 실패: {e}")
                 
                 if not in_sample_df.empty:
                     in_sample_days = len(in_sample_df)
@@ -580,7 +663,7 @@ def compare_unified_model_strategies(preset1, preset2, years=3, rf_ticker='^IRX'
     results = {}
     
     for i, preset in enumerate([preset1, preset2], 1):
-        print_status(f"전략 {i}: {preset['name']} (통합 모델)")
+        print(f"\n=== 전략 {i}: {preset['name']} (통합 모델) ===")
         
         strategy = UniversalRSWithJumpModel(
             preset_config=preset,
@@ -598,7 +681,7 @@ def compare_unified_model_strategies(preset1, preset2, years=3, rf_ticker='^IRX'
     
     # 결과 비교 출력
     if len(results) == 2:
-        print_status(f"전략 비교 결과 (통합 모델 + 동적 Risk-Free Rate: {rf_ticker})", "SUCCESS")
+        print(f"\n=== 전략 비교 결과 (통합 모델 + 동적 Risk-Free Rate: {rf_ticker}) ===")
         strategies = list(results.keys())
         
         print(f"{'지표':<30} {strategies[0]:<25} {strategies[1]:<25}")
@@ -625,9 +708,9 @@ if __name__ == "__main__":
     strategy = UniversalRSWithJumpModel(
         preset_config=sp500_preset,
         use_jump_model=True,
-        use_paper_features_only=True,
-        jump_penalty=50.0,
-        rf_ticker='^IRX',
+        use_paper_features_only=True,  # 통합 모델 기본값
+        jump_penalty=50.0,  # 통합 모델 기본값
+        rf_ticker='^IRX',  # 미국 3개월물 금리
         default_rf_rate=0.02,
         training_cutoff_date=datetime(2024, 12, 31)
     )
@@ -636,29 +719,29 @@ if __name__ == "__main__":
     end_date = datetime.now()
     start_date = end_date - timedelta(days=365*3)  # 3년
     
-    print_status(f"백테스트 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
-    print_status(f"통합 모델 설정:")
-    print_status(f"  - Feature Type: 논문 정확한 3특징")
-    print_status(f"  - Jump Penalty: 50.0")
-    print_status(f"  - Training Cutoff: 2024-12-31")
-    print_status(f"  - Risk-Free Rate: ^IRX (미국 3개월물 국채)")
+    print(f"백테스트 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
+    print(f"통합 모델 설정:")
+    print(f"  - Feature Type: 논문 정확한 3특징")
+    print(f"  - Jump Penalty: 50.0")
+    print(f"  - Training Cutoff: 2024-12-31")
+    print(f"  - Risk-Free Rate: ^IRX (미국 3개월물 국채)")
     
     portfolio_df, trades_df, regime_df = strategy.backtest(start_date, end_date)
     
     if portfolio_df is not None and not portfolio_df.empty:
         metrics = strategy.calculate_performance_metrics(portfolio_df)
         
-        print_status(f"{sp500_preset['name']} 성과 결과 (통합 모델)", "SUCCESS")
+        print(f"\n=== {sp500_preset['name']} 성과 결과 (통합 모델) ===")
         for key, value in metrics.items():
             print(f"{key}: {value}")
         
         # 추가 분석
         if HAS_RF_UTILS:
-            print_status(f"동적 Risk-Free Rate 추가 분석", "SUCCESS")
+            print(f"\n=== 동적 Risk-Free Rate 추가 분석 ===")
             quick_sharpe = calculate_dynamic_sharpe_ratio(portfolio_df, '^IRX')
             quick_sortino = calculate_dynamic_sortino_ratio(portfolio_df, '^IRX')
             
             print(f"빠른 Sharpe 계산: {quick_sharpe:.3f}")
             print(f"빠른 Sortino 계산: {quick_sortino:.3f}")
     
-    print_status(f"통합 모델 + 동적 Risk-Free Rate 시스템 테스트 완료!", "SUCCESS")
+    print(f"\n통합 모델 + 동적 Risk-Free Rate 시스템 테스트 완료!")
