@@ -2,7 +2,7 @@
 실시간 모니터링 대시보드 - 통합된 Jump Model 사용
 웹 기반 인터랙티브 대시보드 (Streamlit 사용)
 전체 ETF 지원 + 종합 Bull/Bear 상태 모니터링
-2024년까지 학습, 2025년 추론 모델 적용
+2025년 6월까지 학습, 2025년 하반기 추론 모델 적용
 동적 Risk-Free Rate (^IRX) 기반 성과 분석
 """
 
@@ -211,8 +211,6 @@ class UnifiedRealtimeDashboard:
         st.sidebar.markdown("---")
         st.sidebar.markdown("**📊 Dashboard Info**")
         st.sidebar.info("Version: 4.0.0 (Unified Model)")
-        st.sidebar.success("✅ Jump Model 특징 계산 통합")
-        st.sidebar.success("✅ realtime_dashboard 기준 최적화")
     
     def _configure_unified_model(self):
         """통합 모델 설정"""
@@ -463,7 +461,7 @@ class UnifiedRealtimeDashboard:
     def _display_market_status(self):
         """시장 상태 표시"""
         st.subheader("Market Regime Analysis")
-        st.markdown("**Unified Model**: Integrated feature calculation | **Training**: 2005-2024 | **Inference**: 2025")
+        st.markdown("**Unified Model**: Integrated feature calculation | **Training**: 2005-2025.06 | **Inference**: 2025")
         
         preset = st.session_state.selected_preset
         
@@ -476,7 +474,7 @@ class UnifiedRealtimeDashboard:
                         benchmark_name=preset['name'],
                         use_paper_features_only=st.session_state.use_paper_features_only,
                         jump_penalty=st.session_state.jump_penalty,
-                        training_cutoff_date=datetime(2024, 12, 31),
+                        training_cutoff_date=datetime(2025, 6, 30),
                         rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                         default_rf_rate=st.session_state.default_rf_rate
                     )
@@ -496,7 +494,7 @@ class UnifiedRealtimeDashboard:
     
     def _display_regime_info(self, regime_info):
         """체제 정보 표시 - 통합 모델 버전"""
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             regime_emoji = "🟢" if regime_info['regime'] == 'BULL' else "🔴"
@@ -514,11 +512,6 @@ class UnifiedRealtimeDashboard:
         with col4:
             rf_status = "📊 Dynamic" if regime_info.get('dynamic_rf_used', False) else "📌 Fixed"
             st.metric("RF Type", rf_status)
-        
-        with col5:
-            feature_type = regime_info.get('feature_type', 'Unknown')
-            feature_short = "3특징" if "논문 정확한 3특징" in feature_type else "확장특징"
-            st.metric("Features", feature_short)
         
         # 추가 정보
         col1, col2, col3 = st.columns(3)
@@ -555,7 +548,7 @@ class UnifiedRealtimeDashboard:
                         benchmark_name=preset['name'],
                         use_paper_features_only=st.session_state.use_paper_features_only,
                         jump_penalty=st.session_state.jump_penalty,
-                        training_cutoff_date=datetime(2024, 12, 31),
+                        training_cutoff_date=datetime(2025, 6, 30),
                         rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                         default_rf_rate=st.session_state.default_rf_rate
                     )
@@ -835,7 +828,7 @@ class UnifiedRealtimeDashboard:
                     benchmark_name=name,
                     use_paper_features_only=st.session_state.use_paper_features_only,  # 설정된 값 사용
                     jump_penalty=st.session_state.jump_penalty,  # 설정된 값 사용
-                    training_cutoff_date=datetime(2024, 12, 31),
+                    training_cutoff_date=datetime(2025, 6, 30),
                     rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                     default_rf_rate=st.session_state.default_rf_rate
                 )
@@ -1213,7 +1206,7 @@ class UnifiedRealtimeDashboard:
                     use_jump_model=True,
                     rf_ticker=st.session_state.rf_ticker if st.session_state.use_dynamic_rf else None,
                     default_rf_rate=st.session_state.default_rf_rate,
-                    training_cutoff_date=datetime(2024, 12, 31)
+                    training_cutoff_date=datetime(2025, 6, 30)
                 )
                 
                 end_date = datetime.now()
