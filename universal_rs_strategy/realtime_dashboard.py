@@ -125,6 +125,7 @@ class UnifiedRealtimeDashboard:
         self._init_session_state()
         self.presets = {
             'S&P 500 Sectors': PresetManager.get_sp500_sectors(),
+            'Crypto': PresetManager.get_crypto_assets(),
             'KOSPI 200 Sectors': PresetManager.get_kospi_sectors(),
             'KOSPI Full Market': PresetManager.get_kospi_full_sectors(),
             'KOSDAQ Sectors': PresetManager.get_kosdaq_sectors(),
@@ -661,15 +662,6 @@ class UnifiedRealtimeDashboard:
                 return
         else:
             st.markdown("**Full Market Analysis** (All ETFs across all strategies)")
-        
-        # 통합 모델 정보 표시
-        st.markdown(f"""
-        <div class="unified-model">
-            <strong>🔧 Analysis with Unified Jump Model</strong><br>
-            📊 Feature Type: {'논문 정확한 3특징' if st.session_state.use_paper_features_only else '논문 기반 + 추가 특징'}<br>
-            🎯 Jump Penalty: {st.session_state.jump_penalty}
-        </div>
-        """, unsafe_allow_html=True)
         
         button_text = "🔄 Analyze Selected Tickers (Unified)" if st.session_state.regime_analysis_mode == 'selected' else "🔄 Analyze All Regimes (Unified)"
         
